@@ -1522,4 +1522,10 @@ static int arm_init(void)
 	return rc;
 }
 
+#ifdef DIAG_KVM_LATE_INIT
+/* DIAG build only: see patches/kernel-sprd/diag-only-kvm-late-init.patch */
+late_initcall(arm_init);
+#else
 module_init(arm_init);
+#endif
+

@@ -16,6 +16,7 @@
  *	01Mar01 Andrew Morton
  */
 
+#include <linux/diag_stage.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/tty.h>
@@ -2019,6 +2020,9 @@ int vprintk_store(int facility, int level,
 	if (dict)
 		lflags |= LOG_PREFIX|LOG_NEWLINE;
 
+	#if DIAG_SCREEN
+	diag_screen_puts(text, text_len);
+	#endif
 	return log_output(facility, level, lflags,
 			  dict, dictlen, text, text_len);
 }

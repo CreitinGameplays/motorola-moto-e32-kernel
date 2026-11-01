@@ -116,13 +116,31 @@ pe_header:
 	 *  x24        __primary_switch() .. relocate_kernel()
 	 *                                        current RELR displacement
 	 */
+
+/*
+ * DIAG: paint band \band through a *physical* store.  Only valid while the
+ * MMU is off, which is exactly where these probes sit (stext).  Clobbers
+ * x9/x10/x11, which the boot path does not use before start_kernel().
+ */
+	.macro	diag_probe, band
+	movz	x10, #(((0x9e000000 + (\band) * 0x20000) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\band) * 0x20000) & 0xffff)
+	movn	x9, #0
+	movz	x11, #8192
+9991:	stp	x9, x9, [x10], #16
+	subs	x11, x11, #1
+	b.ne	9991b
+	.endm
+
 ENTRY(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
+	diag_probe 22
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
 	bl	__create_page_tables
+	diag_probe 23
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
 	 * details.
@@ -130,6 +148,7 @@ ENTRY(stext)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
+	diag_probe 24
 	b	__primary_switch
 ENDPROC(stext)
 

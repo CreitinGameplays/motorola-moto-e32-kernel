@@ -540,28 +540,46 @@ static void __init mm_init(void)
 	pti_init();
 }
 
+#include <linux/diag_stage.h>
+
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
 	char *after_dashes;
+	DIAG_STAGE_1;
+	DIAG_EARLY_HOOK(1);
+	DIAG_SMC_HOOK(1);
 
 	set_task_stack_end_magic(&init_task);
+	DIAG_EARLY_HOOK(2);
 	smp_setup_processor_id();
+	DIAG_EARLY_HOOK(3);
 	debug_objects_early_init();
+	DIAG_EARLY_HOOK(4);
 
 	cgroup_init_early();
+	DIAG_EARLY_HOOK(5);
 
 	local_irq_disable();
 	early_boot_irqs_disabled = true;
+	DIAG_EARLY_HOOK(6);
 
 	/*
 	 * Interrupts are still disabled. Do necessary setups, then
 	 * enable them.
 	 */
 	boot_cpu_init();
+	DIAG_EARLY_HOOK(7);
 	page_address_init();
+	DIAG_EARLY_HOOK(8);
 	pr_notice("%s", linux_banner);
+	DIAG_EARLY_HOOK(9);
 	setup_arch(&command_line);
+	DIAG_STAGE_2;
+	DIAG_ARM_HOOK(2);
+	DIAG_SMC_HOOK(2);
+	DIAG_PAINT_HOOK(2);
+	DIAG_STAGE_2;
 	/*
 	 * Set up the the initial canary and entropy after arch
 	 * and after adding latent and command line entropy.
@@ -581,6 +599,11 @@ asmlinkage __visible void __init start_kernel(void)
 
 	build_all_zonelists(NULL);
 	page_alloc_init();
+	DIAG_STAGE_3;
+	DIAG_ARM_HOOK(3);
+	DIAG_SMC_HOOK(3);
+	DIAG_PAINT_HOOK(3);
+	DIAG_STAGE_3;
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
 	/* parameters may set static keys */
@@ -733,6 +756,11 @@ asmlinkage __visible void __init start_kernel(void)
 	delayacct_init();
 
 	check_bugs();
+	DIAG_STAGE_4;
+	DIAG_ARM_HOOK(4);
+	DIAG_SMC_HOOK(4);
+	DIAG_PAINT_HOOK(4);
+	DIAG_STAGE_4;
 
 	acpi_subsystem_init();
 	arch_post_acpi_subsys_init();
@@ -744,6 +772,11 @@ asmlinkage __visible void __init start_kernel(void)
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
+	DIAG_STAGE_5;
+	DIAG_ARM_HOOK(5);
+	DIAG_SMC_HOOK(5);
+	DIAG_PAINT_HOOK(5);
+	DIAG_STAGE_5;
 
 	prevent_tail_call_optimization();
 }
@@ -1036,6 +1069,11 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	kernel_init_freeable();
+	DIAG_STAGE_6;
+	DIAG_ARM_HOOK(6);
+	DIAG_SMC_HOOK(6);
+	DIAG_PAINT_HOOK(6);
+	DIAG_STAGE_6;
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	ftrace_free_init_mem();
@@ -1046,6 +1084,14 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
+#if defined(DIAG_PANIC_AFTER_INIT) && DIAG_PANIC_STAGE == 0 && DIAG_ARM_STAGE == 0 && DIAG_SMC_STAGE == 0 && DIAG_PAINT == 0 && DIAG_ARM_STAGE == 0 && DIAG_SMC_STAGE == 0 && DIAG_ARM_STAGE == 0
+	/* DIAG build only (KCFLAGS=-DDIAG_PANIC_AFTER_INIT): prove that the
+	 * kernel finished every initcall and hand the full boot log to SPRD
+	 * sysdump before userspace starts.  Used to tell a kernel that hangs
+	 * apart from a kernel that boots with dead display/USB.
+	 */
+	panic("DIAG: kernel init complete, about to exec init");
+#endif
 	pr_emerg("run init\n");
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
@@ -1103,6 +1149,11 @@ static noinline void __init kernel_init_freeable(void)
 
 	do_pre_smp_initcalls();
 	lockup_detector_init();
+	DIAG_STAGE_7;
+	DIAG_ARM_HOOK(7);
+	DIAG_SMC_HOOK(7);
+	DIAG_PAINT_HOOK(7);
+	DIAG_STAGE_7;
 
 	smp_init();
 	sched_init_smp();
@@ -1112,6 +1163,11 @@ static noinline void __init kernel_init_freeable(void)
 	page_ext_init();
 
 	do_basic_setup();
+	DIAG_STAGE_8;
+	DIAG_ARM_HOOK(8);
+	DIAG_SMC_HOOK(8);
+	DIAG_PAINT_HOOK(8);
+	DIAG_STAGE_8;
 
 	test_executor_init();
 

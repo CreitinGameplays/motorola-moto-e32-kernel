@@ -364,6 +364,27 @@ static int sprd_wdt_fiq_probe(struct platform_device *pdev)
 	wdt_fiq = wdt;
 	platform_set_drvdata(pdev, wdt);
 
+#ifdef DIAG_WDT_ARM
+	/*
+	 * DIAG build only (KCFLAGS=-DDIAG_WDT_ARM).
+	 *
+	 * This driver never calls watchdog_register_device(), and stock Android
+	 * passes androidboot.wdten=0, so nothing ever arms a watchdog: a hard
+	 * stop of the SoC (a bus access that never completes) therefore hangs
+	 * for ever with no panic, no reboot and no dump.  Arm the AON watchdog
+	 * here, where its clocks and the new-version bit are already set up by
+	 * sprd_wdt_fiq_enable(), so a stall resets the board after
+	 * DIAG_WDT_TIMEOUT seconds and the bootloader can capture the crash.
+	 */
+	wdt->wdd.timeout = 30;
+	if (sprd_wdt_fiq_set_timeout(&wdt->wdd, 30))
+		pr_err("DIAG: could not set watchdog timeout\n");
+	if (sprd_wdt_fiq_start(&wdt->wdd))
+		pr_err("DIAG: could not start watchdog\n");
+	else
+		pr_info("DIAG: AON watchdog armed, 30 s\n");
+#endif
+
 	return 0;
 }
 

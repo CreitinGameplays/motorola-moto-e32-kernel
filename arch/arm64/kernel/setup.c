@@ -30,6 +30,7 @@
 #include <linux/bootmem.h>
 #include <linux/screen_info.h>
 #include <linux/init.h>
+#include <linux/diag_stage.h>
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
@@ -244,6 +245,7 @@ u64 __cpu_logical_map[NR_CPUS] = { [0 ... NR_CPUS-1] = INVALID_HWID };
 
 void __init setup_arch(char **cmdline_p)
 {
+	DIAG_EARLY_HOOK(10);
 	pr_info("Boot CPU: AArch64 Processor [%08x]\n", read_cpuid_id());
 
 	sprintf(init_utsname()->machine, UTS_MACHINE);
@@ -256,8 +258,10 @@ void __init setup_arch(char **cmdline_p)
 
 	early_fixmap_init();
 	early_ioremap_init();
+	DIAG_TRACE_HOOK(11, 1);
 
 	setup_machine_fdt(__fdt_pointer);
+	DIAG_TRACE_HOOK(12, 1);
 
 	/*
 	 * Initialise the static keys early as they may be enabled by the
@@ -265,6 +269,7 @@ void __init setup_arch(char **cmdline_p)
 	 */
 	jump_label_init();
 	parse_early_param();
+	DIAG_TRACE_HOOK(13, 1);
 
 	/*
 	 *  Unmask asynchronous aborts after bringing up possible earlycon.
@@ -281,8 +286,11 @@ void __init setup_arch(char **cmdline_p)
 	xen_early_init();
 	efi_init();
 	arm64_memblock_init();
+	DIAG_TRACE_HOOK(14, 1);
 
 	paging_init();
+	DIAG_TRACE_HOOK(15, 0);
+	DIAG_SCREEN_INIT;
 
 	acpi_table_upgrade();
 
@@ -291,12 +299,14 @@ void __init setup_arch(char **cmdline_p)
 
 	if (acpi_disabled)
 		unflatten_device_tree();
+		DIAG_TRACE_HOOK(16, 0);
 
 	bootmem_init();
 
 	kasan_init();
 
 	request_standard_resources();
+	DIAG_TRACE_HOOK(17, 0);
 
 	early_ioremap_reset();
 
@@ -307,7 +317,9 @@ void __init setup_arch(char **cmdline_p)
 
 	cpu_read_bootcpu_ops();
 	smp_init_cpus();
+	DIAG_TRACE_HOOK(18, 0);
 	smp_build_mpidr_hash();
+	DIAG_TRACE_HOOK(19, 0);
 
 	/* Init percpu seeds for random tags after cpus are set up. */
 	kasan_init_tags();
