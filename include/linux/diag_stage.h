@@ -48,9 +48,10 @@
 #define DIAG_FB_ROWS	720U
 #define DIAG_GLYPH_W	8U
 #define DIAG_GLYPH_H	16U
-#define DIAG_SCALE	3U	/* 24x48 glyphs */
-#define DIAG_CW	(DIAG_GLYPH_W * DIAG_SCALE)
-#define DIAG_CH	(DIAG_GLYPH_H * DIAG_SCALE)
+#define DIAG_SX		3U	/* 24 px wide glyphs */
+#define DIAG_SY		3U	/* 48 px tall glyphs */
+#define DIAG_CW		(DIAG_GLYPH_W * DIAG_SX + 2U)	/* 2 px column gap */
+#define DIAG_CH		(DIAG_GLYPH_H * DIAG_SY + 8U)	/* 8 px line gap */
 #define DIAG_TOP	48U
 #define DIAG_COLS	(DIAG_FB_STRIDE / 3UL / DIAG_CW)
 #define DIAG_ROWS	((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
@@ -98,15 +99,16 @@ static inline void diag_scr_glyph(u8 *base, unsigned char ch)
 	unsigned int y, x, i, j;
 
 	for (y = 0; y < DIAG_GLYPH_H; y++) {
-		u8 *line = base + (unsigned long)y * DIAG_SCALE * DIAG_FB_STRIDE;
+		u8 *line = base + (unsigned long)y * DIAG_SY * DIAG_FB_STRIDE;
 
 		for (x = 0; x < DIAG_GLYPH_W; x++) {
 			u32 rgb = (g[y] & (0x80U >> x)) ? 0xffffffU : DIAG_BG;
 
-			for (i = 0; i < DIAG_SCALE; i++)
-				for (j = 0; j < DIAG_SCALE; j++)
+			for (i = 0; i < DIAG_SY; i++)
+				for (j = 0; j < DIAG_SX; j++)
 					diag_scr_pixel(line +
-						(x * DIAG_SCALE + j) * 3U, rgb);
+						i * DIAG_FB_STRIDE +
+						(x * DIAG_SX + j) * 3U, rgb);
 		}
 	}
 }
@@ -229,7 +231,6 @@ static inline char *diag_hex(char *p, unsigned long long v, unsigned int digits)
 static inline void diag_el_report(void)
 {
 	char line[DIAG_COLS + 1];
-	const char *verdict;
 	char *p;
 	u64 pfr0;
 
@@ -242,6 +243,15 @@ static inline void diag_el_report(void)
 	memcpy(p, " hyp=", 5);
 	p += 5;
 	*p++ = is_hyp_mode_available() ? '1' : '0';
+	memcpy(p, " KVM:", 5);
+	p += 5;
+	if (is_hyp_mode_available()) {
+		memcpy(p, "possible", 8);
+		p += 8;
+	} else {
+		memcpy(p, "impossible", 10);
+		p += 10;
+	}
 	*p = '\0';
 	diag_screen_head(0, line, p - line);
 
@@ -252,12 +262,23 @@ static inline void diag_el_report(void)
 	*p = '\0';
 	diag_screen_head(1, line, p - line);
 
-	verdict = is_hyp_mode_available() ?
-		"EL2: KVM can work on this device" :
-		"no EL2 -> KVM impossible here";
-	diag_screen_head(2, verdict, strlen(verdict));
-
 	diag_state.row = DIAG_HEAD;
+}
+
+/*
+ * The initcall that is about to run.  do_one_initcall() calls this before
+ * every initcall; if one of them never returns, its name is still on the
+ * permanent row and the photo names the culprit.  %pF resolves through
+ * kallsyms, which is a static table and is usable long before do_initcalls().
+ */
+static inline void diag_show_initcall(void *fn)
+{
+	char line[DIAG_COLS + 1];
+	int n;
+
+	n = scnprintf(line, sizeof(line), "IC: %pF", fn);
+	if (n > 0)
+		diag_screen_head(2, line, (unsigned int)n);
 }
 
 #define DIAG_TAG(n) diag_screen_tag(n)
@@ -279,11 +300,14 @@ static inline void diag_screen_init(void)
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
 #define DIAG_EL_REPORT do { } while (0)
+#define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
 #define DIAG_EL_REPORT diag_el_report()
+#define DIAG_INITCALL_NAME(fn) \
+	do { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
 #define DIAG_SCR_READY diag_state.ready
 
 /*

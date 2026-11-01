@@ -580,7 +580,6 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_SMC_HOOK(2);
 	DIAG_PAINT_HOOK(2);
 	DIAG_STAGE_TAG(22);
-	DIAG_STAGE_2;
 	/*
 	 * Set up the the initial canary and entropy after arch
 	 * and after adding latent and command line entropy.
@@ -605,7 +604,6 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_SMC_HOOK(3);
 	DIAG_PAINT_HOOK(3);
 	DIAG_STAGE_TAG(23);
-	DIAG_STAGE_3;
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
 	/* parameters may set static keys */
@@ -763,7 +761,6 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_SMC_HOOK(4);
 	DIAG_PAINT_HOOK(4);
 	DIAG_STAGE_TAG(24);
-	DIAG_STAGE_4;
 
 	acpi_subsystem_init();
 	arch_post_acpi_subsys_init();
@@ -773,14 +770,13 @@ asmlinkage __visible void __init start_kernel(void)
 		efi_free_boot_services();
 	}
 
-	/* Do the rest non-__init'ed, we're now alive */
-	rest_init();
 	DIAG_STAGE_5;
 	DIAG_ARM_HOOK(5);
 	DIAG_SMC_HOOK(5);
 	DIAG_PAINT_HOOK(5);
 	DIAG_STAGE_TAG(25);
-	DIAG_STAGE_5;
+	/* Do the rest non-__init'ed, we're now alive */
+	rest_init();
 
 	prevent_tail_call_optimization();
 }
@@ -894,6 +890,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 
 	if (initcall_blacklisted(fn))
 		return -EPERM;
+	DIAG_INITCALL_NAME(fn);
 
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
@@ -1072,13 +1069,12 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
-	kernel_init_freeable();
 	DIAG_STAGE_6;
 	DIAG_ARM_HOOK(6);
 	DIAG_SMC_HOOK(6);
 	DIAG_PAINT_HOOK(6);
 	DIAG_STAGE_TAG(26);
-	DIAG_STAGE_6;
+	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
 	ftrace_free_init_mem();
@@ -1159,7 +1155,6 @@ static noinline void __init kernel_init_freeable(void)
 	DIAG_SMC_HOOK(7);
 	DIAG_PAINT_HOOK(7);
 	DIAG_STAGE_TAG(27);
-	DIAG_STAGE_7;
 
 	smp_init();
 	sched_init_smp();
@@ -1174,7 +1169,6 @@ static noinline void __init kernel_init_freeable(void)
 	DIAG_SMC_HOOK(8);
 	DIAG_PAINT_HOOK(8);
 	DIAG_STAGE_TAG(28);
-	DIAG_STAGE_8;
 
 	test_executor_init();
 

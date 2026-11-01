@@ -76,9 +76,10 @@ HEADER = """#ifndef _LINUX_DIAG_STAGE_H
 #define DIAG_FB_ROWS\t720U
 #define DIAG_GLYPH_W\t8U
 #define DIAG_GLYPH_H\t16U
-#define DIAG_SCALE\t3U\t/* 24x48 glyphs */
-#define DIAG_CW\t(DIAG_GLYPH_W * DIAG_SCALE)
-#define DIAG_CH\t(DIAG_GLYPH_H * DIAG_SCALE)
+#define DIAG_SX\t\t3U\t/* 24 px wide glyphs */
+#define DIAG_SY\t\t3U\t/* 48 px tall glyphs */
+#define DIAG_CW\t\t(DIAG_GLYPH_W * DIAG_SX + 2U)\t/* 2 px column gap */
+#define DIAG_CH\t\t(DIAG_GLYPH_H * DIAG_SY + 8U)\t/* 8 px line gap */
 #define DIAG_TOP\t48U
 #define DIAG_COLS\t(DIAG_FB_STRIDE / 3UL / DIAG_CW)
 #define DIAG_ROWS\t((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
@@ -126,15 +127,16 @@ static inline void diag_scr_glyph(u8 *base, unsigned char ch)
 	unsigned int y, x, i, j;
 
 	for (y = 0; y < DIAG_GLYPH_H; y++) {
-		u8 *line = base + (unsigned long)y * DIAG_SCALE * DIAG_FB_STRIDE;
+		u8 *line = base + (unsigned long)y * DIAG_SY * DIAG_FB_STRIDE;
 
 		for (x = 0; x < DIAG_GLYPH_W; x++) {
 			u32 rgb = (g[y] & (0x80U >> x)) ? 0xffffffU : DIAG_BG;
 
-			for (i = 0; i < DIAG_SCALE; i++)
-				for (j = 0; j < DIAG_SCALE; j++)
+			for (i = 0; i < DIAG_SY; i++)
+				for (j = 0; j < DIAG_SX; j++)
 					diag_scr_pixel(line +
-						(x * DIAG_SCALE + j) * 3U, rgb);
+						i * DIAG_FB_STRIDE +
+						(x * DIAG_SX + j) * 3U, rgb);
 		}
 	}
 }
@@ -257,7 +259,6 @@ static inline char *diag_hex(char *p, unsigned long long v, unsigned int digits)
 static inline void diag_el_report(void)
 {
 	char line[DIAG_COLS + 1];
-	const char *verdict;
 	char *p;
 	u64 pfr0;
 
@@ -270,6 +271,15 @@ static inline void diag_el_report(void)
 	memcpy(p, " hyp=", 5);
 	p += 5;
 	*p++ = is_hyp_mode_available() ? '1' : '0';
+	memcpy(p, " KVM:", 5);
+	p += 5;
+	if (is_hyp_mode_available()) {
+		memcpy(p, "possible", 8);
+		p += 8;
+	} else {
+		memcpy(p, "impossible", 10);
+		p += 10;
+	}
 	*p = '\\0';
 	diag_screen_head(0, line, p - line);
 
@@ -280,12 +290,23 @@ static inline void diag_el_report(void)
 	*p = '\\0';
 	diag_screen_head(1, line, p - line);
 
-	verdict = is_hyp_mode_available() ?
-		"EL2: KVM can work on this device" :
-		"no EL2 -> KVM impossible here";
-	diag_screen_head(2, verdict, strlen(verdict));
-
 	diag_state.row = DIAG_HEAD;
+}
+
+/*
+ * The initcall that is about to run.  do_one_initcall() calls this before
+ * every initcall; if one of them never returns, its name is still on the
+ * permanent row and the photo names the culprit.  %pF resolves through
+ * kallsyms, which is a static table and is usable long before do_initcalls().
+ */
+static inline void diag_show_initcall(void *fn)
+{
+	char line[DIAG_COLS + 1];
+	int n;
+
+	n = scnprintf(line, sizeof(line), "IC: %pF", fn);
+	if (n > 0)
+		diag_screen_head(2, line, (unsigned int)n);
 }
 
 #define DIAG_TAG(n) diag_screen_tag(n)
@@ -307,11 +328,14 @@ static inline void diag_screen_init(void)
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
 #define DIAG_EL_REPORT do { } while (0)
+#define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
 #define DIAG_EL_REPORT diag_el_report()
+#define DIAG_INITCALL_NAME(fn) \\
+\tdo { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
 #define DIAG_SCR_READY diag_state.ready
 
 /*
@@ -505,14 +529,18 @@ EDITS = [
      "\tDIAG_STAGE_3;\n\tDIAG_ARM_HOOK(3);\n", "DIAG_ARM_HOOK(3);"),
     ("\tcheck_bugs();\n",
      "\tDIAG_STAGE_4;\n\tDIAG_ARM_HOOK(4);\n", "DIAG_ARM_HOOK(4);"),
-    ("\t/* Do the rest non-__init'ed, we're now alive */\n\trest_init();\n",
-     "\tDIAG_STAGE_5;\n\tDIAG_ARM_HOOK(5);\n", "DIAG_ARM_HOOK(5);"),
-    ("static int __ref kernel_init(void *unused)\n{\n\tint ret;\n\n\tkernel_init_freeable();\n",
-     "\tDIAG_STAGE_6;\n\tDIAG_ARM_HOOK(6);\n", "DIAG_ARM_HOOK(6);"),
     ("\tdo_pre_smp_initcalls();\n\tlockup_detector_init();\n",
      "\tDIAG_STAGE_7;\n\tDIAG_ARM_HOOK(7);\n", "DIAG_ARM_HOOK(7);"),
     ("\tdo_basic_setup();\n",
      "\tDIAG_STAGE_8;\n\tDIAG_ARM_HOOK(8);\n", "DIAG_ARM_HOOK(8);"),
+]
+
+# Inserted BEFORE the anchor text (the EDITS list above inserts after).
+EDITS_BEFORE = [
+    ("\t/* Do the rest non-__init'ed, we're now alive */\n\trest_init();\n",
+     "\tDIAG_STAGE_5;\n\tDIAG_ARM_HOOK(5);\n", "DIAG_ARM_HOOK(5);"),
+    ("\tkernel_init_freeable();\n",
+     "\tDIAG_STAGE_6;\n\tDIAG_ARM_HOOK(6);\n", "DIAG_ARM_HOOK(6);"),
 ]
 
 # setup_arch() milestones for paint mode 2, in execution order.  Bands 1..4
@@ -603,6 +631,19 @@ def main():
         s = s.replace(anchor, '#include <linux/diag_stage.h>\n\n' + anchor)
         print("added #include <linux/diag_stage.h>")
 
+    # Strip every marker this generator may have inserted in an earlier run
+    # (possibly with different anchors), then insert everything fresh.  The
+    # branch carries the previous snapshot as a commit, so without this the
+    # markers accumulate and end up in dead positions.
+    stripped = re.sub(r"[ \t]*DIAG_(?:STAGE_\d+|ARM_HOOK\(\d+\)|SMC_HOOK\(\d+\)|"
+                      r"PAINT_HOOK\(\d+\)|STAGE_TAG\(\d+\)|EARLY_HOOK\(\d+\)|"
+                      r"INITCALL_NAME\(fn\));\n",
+                      "", s)
+    if stripped != s:
+        print("stripped %d stale DIAG markers from init/main.c"
+              % (s.count("DIAG_") - stripped.count("DIAG_")))
+        s = stripped
+
     for anchor, ins, marker in EDITS:
         if marker in s:
             continue
@@ -612,6 +653,29 @@ def main():
             continue
         s = s.replace(anchor, anchor + ins)
         print("inserted %s" % marker)
+
+    # Markers that must run before the statement they belong to.
+    for anchor, ins, marker in EDITS_BEFORE:
+        if marker in s:
+            continue
+        n = s.count(anchor)
+        if n != 1:
+            print("WARN: anchor for %s occurs %d times, skipped" % (marker, n))
+            continue
+        s = s.replace(anchor, ins + anchor)
+        print("inserted %s (before anchor)" % marker)
+
+    # Live "which initcall is running" line: do_one_initcall() names the
+    # initcall on the permanent header row before calling it, so a hung
+    # initcall identifies itself on the panel.
+    anchor = "\tif (initcall_blacklisted(fn))\n\t\treturn -EPERM;\n"
+    if "DIAG_INITCALL_NAME(fn);" not in s:
+        n = s.count(anchor)
+        if n != 1:
+            print("WARN: do_one_initcall anchor occurs %d times, skipped" % n)
+        else:
+            s = s.replace(anchor, anchor + "\tDIAG_INITCALL_NAME(fn);\n", 1)
+            print("inserted DIAG_INITCALL_NAME(fn) into do_one_initcall")
 
     # The SMC hooks go in separately: main.c already carries the arm hooks
     # from earlier builds, so the EDITS loop above would skip these anchors.
