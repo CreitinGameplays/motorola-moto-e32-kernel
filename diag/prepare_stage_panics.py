@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare the staged instrumentation in init/main.c (idempotent).
 
-Two independent knobs, both in the generated include/linux/diag_stage.h, so a
+Compile-time knobs in the generated include/linux/diag_stage.h, so a
 bisection step is one incremental rebuild of init/main.c (seconds), not a full
 kernel build:
 
@@ -16,15 +16,80 @@ kernel build:
                         0x84000009) at stage N.  Unlike the AON watchdog this
                         needs no MMIO mapping and no clock, so it works from
                         the first instruction of start_kernel(); it is a
-                        warm reset, so pstore survives it.  If the SMC is not
-                        implemented the call returns and the boot continues.
+                        warm reset, preserving DRAM. Ramoops can record the
+                        marker only after its driver initializes. If the SMC
+                        returns, the boot continues.
                         0 = off.
+  checkpoint        off | setup:<name> | initcall:<level>:<name|ordinal>
+                        write a DIAG breadcrumb, then request PSCI SYSTEM_RESET
+                        before the selected setup step or initcall. Initcall
+                        ordinals are 1-based within the named level.
+  psci_conduit      smc (device default) or hvc (QEMU virt-only check).
 """
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path.home() / "kernel-sprd"
+
+SETUP_CHECKPOINTS = (
+    "cpuset_init_smp",
+    "shmem_init",
+    "driver_init",
+    "init_irq_proc",
+    "do_ctors",
+    "usermodehelper_enable",
+    "do_initcalls",
+)
+INITCALL_LEVELS = (
+    "pre_smp", "early", "core", "postcore", "arch", "subsys", "fs",
+    "device", "late",
+)
+
+
+def parse_checkpoint(spec):
+    """Validate a selector and return the generated C preprocessor values."""
+    result = {
+        "kind": 0,
+        "setup_id": 0,
+        "level": "",
+        "ordinal": 0,
+        "name": "",
+        "label": "off",
+    }
+    if spec in ("", "off", "0"):
+        return result
+
+    if spec.startswith("setup:"):
+        name = spec[len("setup:"):]
+        if name not in SETUP_CHECKPOINTS:
+            raise SystemExit("unknown setup checkpoint %r; choose one of: %s" %
+                             (name, ", ".join(SETUP_CHECKPOINTS)))
+        result.update(kind=1, setup_id=SETUP_CHECKPOINTS.index(name) + 1,
+                      name=name, label="setup:" + name)
+        return result
+
+    if spec.startswith("initcall:"):
+        parts = spec.split(":")
+        if len(parts) != 3 or parts[1] not in INITCALL_LEVELS:
+            raise SystemExit("initcall checkpoint must be "
+                             "initcall:<level>:<name|ordinal>; levels: %s" %
+                             ", ".join(INITCALL_LEVELS))
+        level, selector = parts[1], parts[2]
+        if re.fullmatch(r"[1-9][0-9]*", selector):
+            result.update(kind=2, level=level, ordinal=int(selector),
+                          name=selector, label="initcall:%s:%s" %
+                          (level, selector))
+            return result
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", selector):
+            raise SystemExit("initcall name must be a C identifier or a "
+                             "1-based ordinal, got %r" % selector)
+        result.update(kind=3, level=level, name=selector,
+                      label="initcall:%s:%s" % (level, selector))
+        return result
+
+    raise SystemExit("checkpoint must be off, setup:<name>, or "
+                     "initcall:<level>:<name|ordinal>")
 
 HEADER = """#ifndef _LINUX_DIAG_STAGE_H
 #define _LINUX_DIAG_STAGE_H
@@ -45,7 +110,10 @@ HEADER = """#ifndef _LINUX_DIAG_STAGE_H
 #include <linux/io.h>
 #include <linux/bitops.h>
 #include <linux/arm-smccc.h>
+#include <linux/kallsyms.h>
 #include <linux/mm.h>
+#include <linux/printk.h>
+#include <linux/string.h>
 #include <asm/cacheflush.h>
 #include <asm/barrier.h>
 #include <asm/cputype.h>
@@ -64,9 +132,10 @@ HEADER = """#ifndef _LINUX_DIAG_STAGE_H
  * buffer is packed RGB888 with a 4800-byte stride.  Writing 32-bit pixels
  * there shears every glyph row by 4/3 (the "straight white lines" artefact).
  *
- * Row 0 is a permanent milestone line: each visual probe appends its band
- * number, so one boot still says how far the kernel got even when it hangs
- * before printing anything.  Rows below hold the printk mirror.
+ * Row 0 is a permanent milestone line; rows 1..3 hold EL/KVM, CPU ID, and
+ * the single current setup/initcall status.  printk mirroring is deliberately
+ * disabled: vprintk_emit() may be entered concurrently by several CPUs, and
+ * drawing there races the shared cursor and overwrites text.
  */
 #if DIAG_SCREEN
 #include <linux/diag_font.h>
@@ -76,10 +145,10 @@ HEADER = """#ifndef _LINUX_DIAG_STAGE_H
 #define DIAG_FB_ROWS\t720U
 #define DIAG_GLYPH_W\t8U
 #define DIAG_GLYPH_H\t16U
-#define DIAG_SX\t\t3U\t/* 24 px wide glyphs */
-#define DIAG_SY\t\t3U\t/* 48 px tall glyphs */
+#define DIAG_SX\t\t2U\t/* 16 px wide glyphs */
+#define DIAG_SY\t\t2U\t/* 32 px tall glyphs */
 #define DIAG_CW\t\t(DIAG_GLYPH_W * DIAG_SX + 2U)\t/* 2 px column gap */
-#define DIAG_CH\t\t(DIAG_GLYPH_H * DIAG_SY + 8U)\t/* 8 px line gap */
+#define DIAG_CH\t\t(DIAG_GLYPH_H * DIAG_SY + 4U)\t/* 4 px line gap */
 #define DIAG_TOP\t48U
 #define DIAG_COLS\t(DIAG_FB_STRIDE / 3UL / DIAG_CW)
 #define DIAG_ROWS\t((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
@@ -304,7 +373,7 @@ static inline void diag_show_initcall(void *fn)
 	char line[DIAG_COLS + 1];
 	int n;
 
-	n = scnprintf(line, sizeof(line), "IC: %pF", fn);
+ n = scnprintf(line, sizeof(line), "INIT: %pF", fn);
 	if (n > 0)
 		diag_screen_head(2, line, (unsigned int)n);
 }
@@ -328,6 +397,8 @@ static inline void diag_screen_init(void)
 #define DIAG_INITCALL_NAME(fn) \\
 \tdo { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
 #define DIAG_SCR_READY diag_state.ready
+#define DIAG_SETUP_STATUS(name) \\
+	do { diag_screen_head(2, "SETUP: " name, sizeof("SETUP: " name) - 1); } while (0)
 #else
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
@@ -335,6 +406,7 @@ static inline void diag_screen_init(void) { }
 #define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
 #define DIAG_STAGE_TAG(n) do { } while (0)
+#define DIAG_SETUP_STATUS(name) do { } while (0)
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
@@ -353,28 +425,154 @@ void diag_stage_mirror(const char *text, size_t len);
 #define DIAG_ARM_STAGE %ARM%
 #define DIAG_ARM_TIMEOUT 10
 #define DIAG_SMC_STAGE %SMC%
+#define DIAG_CHECKPOINT_KIND %CHECKPOINT_KIND%
+#define DIAG_CHECKPOINT_SETUP_ID %CHECKPOINT_SETUP_ID%
+#define DIAG_CHECKPOINT_LEVEL "%CHECKPOINT_LEVEL%"
+#define DIAG_CHECKPOINT_ORDINAL %CHECKPOINT_ORDINAL%
+#define DIAG_CHECKPOINT_NAME "%CHECKPOINT_NAME%"
+#define DIAG_CHECKPOINT_LABEL "%CHECKPOINT_LABEL%"
+#define DIAG_PSCI_USE_HVC %PSCI_HVC%
 
 /*
  * Reset the SoC through the PSCI SYSTEM_RESET function (SMCCC 0x84000009).
  *
- * This is the only reset source usable at the very first statement of
- * start_kernel(): it is a secure-monitor call, so it needs no device mapping,
- * no clock and no driver.  It is also a warm reset, which is what makes the
- * ramoops/pstore region survive and be readable on the next boot.
+ * This reset source is usable at the very first statement of start_kernel():
+ * it is a secure-monitor call, so it needs no device mapping, clock or driver.
+ * The warm reset preserves DRAM. A checkpoint marker is present in ramoops
+ * only if the ramoops console has already initialized; earlier probes rely on
+ * the validated reset outcome (or a separately verified serial capture).
  *
  * If the monitor does not implement the function the call simply returns and
  * the boot continues, so "no reset" must be read as "the code did not run"
  * only after a stage that is known to be reached.
  */
-static inline void diag_psci_reset(void)
+static inline long diag_psci_reset(void)
 {
 \tstruct arm_smccc_res res;
 
+#if DIAG_PSCI_USE_HVC
+\tarm_smccc_hvc(0x84000009UL, 0, 0, 0, 0, 0, 0, 0, &res);
+#else
 \tarm_smccc_smc(0x84000009UL, 0, 0, 0, 0, 0, 0, 0, &res);
+#endif
+	return (long)res.a0;
+}
+
+static inline void diag_checkpoint_reset(const char *label)
+{
+\tlong status;
+
+\tdsb(sy);
+\tstatus = diag_psci_reset();
+\tpr_emerg("DIAG: PSCI_SYSTEM_RESET returned: checkpoint=%s status=%ld\\n",
+\t\t label, status);
 }
 
 #define DIAG_SMC_HOOK(n) \\
-\tdo { if (DIAG_SMC_STAGE == (n)) diag_psci_reset(); } while (0)
+\tdo { if (DIAG_SMC_STAGE == (n)) { \\
+\t\tchar diag_label[16]; \\
+\t\tscnprintf(diag_label, sizeof(diag_label), "stage:%d", (n)); \\
+\t\tpr_emerg("DIAG: CHECKPOINT reached: %s\\n", diag_label); \\
+\t\tdiag_checkpoint_reset(diag_label); \\
+\t} } while (0)
+
+#define DIAG_SETUP_CHECKPOINT(id, name) \\
+\tdo { if (DIAG_CHECKPOINT_KIND == 1 && \\
+\t\tDIAG_CHECKPOINT_SETUP_ID == (id)) { \\
+\t\tpr_emerg("DIAG: CHECKPOINT reached: setup:%s\\n", name); \\
+\t\tdiag_checkpoint_reset("setup:" name); \\
+\t} } while (0)
+
+static inline int diag_initcall_symbol_name(initcall_t fn, char *symbol)
+{
+\treturn lookup_symbol_name((unsigned long)fn, symbol);
+}
+
+static inline void diag_log_initcall(initcall_t fn)
+{
+\tchar symbol[KSYM_NAME_LEN];
+
+\tif (diag_initcall_symbol_name(fn, symbol))
+\t\tpr_emerg("DIAG: initcall %#lx\\n", (unsigned long)fn);
+\telse
+\t\tpr_emerg("DIAG: initcall %s\\n", symbol);
+}
+
+struct diag_initcall_symbol_match {
+\tconst char *name;
+\tunsigned long body;
+\tunsigned long cfi_jt;
+};
+
+static inline int diag_find_initcall_symbol(void *data, const char *name,
+\t\t\t\t\t    struct module *mod,
+\t\t\t\t\t    unsigned long address)
+{
+\tstruct diag_initcall_symbol_match *match = data;
+\tsize_t len = strlen(match->name);
+
+\tif (mod || strncmp(name, match->name, len) ||
+\t    (name[len] && name[len] != '$' && name[len] != '.'))
+\t\treturn 0;
+\tif (strstr(name, ".cfi_jt"))
+\t\tmatch->cfi_jt = address;
+\telse
+\t\tmatch->body = address;
+\treturn 0;
+}
+
+static inline int diag_initcall_name_matches(initcall_t fn)
+{
+\tstatic int resolved;
+\tstatic unsigned long target, target_cfi;
+
+\tif (!resolved) {
+\t\tstruct diag_initcall_symbol_match match = {
+\t\t\t.name = DIAG_CHECKPOINT_NAME,
+\t\t};
+
+\t\tkallsyms_on_each_symbol(diag_find_initcall_symbol, &match);
+\t\ttarget = match.body;
+\t\ttarget_cfi = match.cfi_jt;
+\t\tresolved = 1;
+\t\tpr_emerg("DIAG: initcall target %s body=%#lx cfi_jt=%#lx\\n",
+\t\t\t DIAG_CHECKPOINT_NAME, target, target_cfi);
+\t}
+\treturn (unsigned long)fn == target ||
+\t       (unsigned long)fn == target_cfi;
+}
+
+static inline void diag_initcall_checkpoint(initcall_t fn, const char *level,
+\t\t\t\t\t    unsigned int ordinal)
+{
+\tchar symbol[KSYM_NAME_LEN];
+\tint match = 0;
+
+\tif (DIAG_CHECKPOINT_KIND == 2)
+\t\tmatch = !strcmp(level, DIAG_CHECKPOINT_LEVEL) &&
+\t\t\tordinal == DIAG_CHECKPOINT_ORDINAL;
+\telse if (DIAG_CHECKPOINT_KIND == 3)
+\t\tmatch = (!DIAG_CHECKPOINT_LEVEL[0] ||
+\t\t\t !strcmp(level, DIAG_CHECKPOINT_LEVEL)) &&
+\t\t\tdiag_initcall_name_matches(fn);
+\tif (match) {
+\t\tif (!diag_initcall_symbol_name(fn, symbol))
+\t\t\tpr_emerg("DIAG: CHECKPOINT reached: %s (level=%s ordinal=%u function=%s)\\n",
+\t\t\t\t DIAG_CHECKPOINT_LABEL, level, ordinal, symbol);
+\t\telse
+\t\t\tpr_emerg("DIAG: CHECKPOINT reached: %s (level=%s ordinal=%u function=%#lx)\\n",
+\t\t\t\t DIAG_CHECKPOINT_LABEL, level, ordinal,
+\t\t\t\t (unsigned long)fn);
+\t\tdsb(sy);
+\t\tdiag_checkpoint_reset(DIAG_CHECKPOINT_LABEL);
+\t}
+}
+
+#define DIAG_INITCALL_CHECKPOINT(fn, level, ordinal) \\
+\tdo { if (DIAG_CHECKPOINT_KIND == 2 || DIAG_CHECKPOINT_KIND == 3) \\
+\t\tdiag_initcall_checkpoint((fn), (level), (ordinal)); } while (0)
+
+#define DIAG_INITCALL_LOG(fn) diag_log_initcall(fn)
 
 #define DIAG_PAINT %PAINT%
 
@@ -608,8 +806,17 @@ def main():
     panic_stage = sys.argv[1] if len(sys.argv) > 1 else "0"
     arm_stage = sys.argv[2] if len(sys.argv) > 2 else "0"
     smc_stage = sys.argv[3] if len(sys.argv) > 3 else "0"
-    paint = sys.argv[4] if len(sys.argv) > 4 else "0"
-    screen = sys.argv[5] if len(sys.argv) > 5 else "0"
+    requested_paint = sys.argv[4] if len(sys.argv) > 4 else "0"
+    requested_screen = sys.argv[5] if len(sys.argv) > 5 else "0"
+    checkpoint_spec = sys.argv[6] if len(sys.argv) > 6 else "off"
+    psci_conduit = sys.argv[7] if len(sys.argv) > 7 else "smc"
+    if psci_conduit not in ("smc", "hvc"):
+        raise SystemExit("PSCI conduit must be smc or hvc")
+    if requested_paint != "0" or requested_screen != "0":
+        print("framebuffer diagnostics retired; forcing paint=0 screen=0")
+    paint = "0"
+    screen = "0"
+    checkpoint = parse_checkpoint(checkpoint_spec)
     src = ROOT / "init" / "main.c"
     hdr = ROOT / "include" / "linux" / "diag_stage.h"
 
@@ -617,12 +824,24 @@ def main():
         write_font_header(ROOT)
 
     hdr.write_text(HEADER.replace("%PANIC%", panic_stage)
-                         .replace("%ARM%", arm_stage)
-                         .replace("%SMC%", smc_stage)
-                         .replace("%PAINT%", paint)
-                         .replace("%SCREEN%", screen))
-    print("wrote include/linux/diag_stage.h (panic=%s arm=%s smc=%s paint=%s screen=%s)"
-          % (panic_stage, arm_stage, smc_stage, paint, screen))
+                          .replace("%ARM%", arm_stage)
+                          .replace("%SMC%", smc_stage)
+                          .replace("%CHECKPOINT_KIND%", str(checkpoint["kind"]))
+                          .replace("%CHECKPOINT_SETUP_ID%",
+                                   str(checkpoint["setup_id"]))
+                          .replace("%CHECKPOINT_LEVEL%", checkpoint["level"])
+                          .replace("%CHECKPOINT_ORDINAL%",
+                                   str(checkpoint["ordinal"]))
+                          .replace("%CHECKPOINT_NAME%", checkpoint["name"])
+                          .replace("%CHECKPOINT_LABEL%", checkpoint["label"])
+                          .replace("%PSCI_HVC%",
+                                   "1" if psci_conduit == "hvc" else "0")
+                          .replace("%PAINT%", paint)
+                          .replace("%SCREEN%", screen))
+    print("wrote include/linux/diag_stage.h (panic=%s arm=%s smc=%s "
+          "checkpoint=%s conduit=%s paint=%s screen=%s)"
+          % (panic_stage, arm_stage, smc_stage, checkpoint["label"],
+             psci_conduit, paint, screen))
 
     s = src.read_text()
 
@@ -638,7 +857,9 @@ def main():
     # markers accumulate and end up in dead positions.
     stripped = re.sub(r"[ \t]*DIAG_(?:STAGE_\d+|ARM_HOOK\(\d+\)|SMC_HOOK\(\d+\)|"
                       r"PAINT_HOOK\(\d+\)|STAGE_TAG\(\d+\)|EARLY_HOOK\(\d+\)|"
-                      r"INITCALL_NAME\(fn\));\n",
+                      r"INITCALL_NAME\(fn\)|INITCALL_LOG\(fn\)|"
+                      r"SETUP_CHECKPOINT\(\d+, \"[A-Za-z0-9_]+\"\)|"
+                      r"INITCALL_CHECKPOINT\(\*fn, [^,]+, .*\));\n",
                       "", s)
     if stripped != s:
         print("stripped %d stale DIAG markers from init/main.c"
@@ -677,12 +898,11 @@ def main():
         else:
             s = s.replace(anchor, anchor + "\tDIAG_INITCALL_NAME(fn);\n", 1)
             print("inserted DIAG_INITCALL_NAME(fn) into do_one_initcall")
-    # Keep initcall identification independent of the framebuffer.  A single
-    # high-priority printk immediately before each call is enough to leave the
-    # last attempted initcall in ramoops' circular console buffer, even if the
-    # function never returns (and without initcall_debug's doubled chatter).
+    # Keep a serializable breadcrumb in printk as well as the panel status.
     call_anchor = "\tDIAG_INITCALL_NAME(fn);\n"
-    call_log = "\tpr_emerg(\"DIAG: initcall %pF\\n\", fn);\n"
+    old_call_log = "\tpr_emerg(\"DIAG: initcall %pF\\n\", fn);\n"
+    s = s.replace(old_call_log, "")
+    call_log = "\tDIAG_INITCALL_LOG(fn);\n"
     if call_log not in s:
         if s.count(call_anchor) == 1:
             s = s.replace(call_anchor, call_anchor + call_log, 1)
@@ -691,21 +911,65 @@ def main():
             print("WARN: initcall breadcrumb anchor occurs %d times"
                   % s.count(call_anchor))
 
+    # Address every initcall by its stable level-local ordinal, while also
+    # permitting a symbol-name selector in the generated header.  The pointer
+    # difference is 1-based and avoids mutable global state in initcall code.
+    initcall_loops = (
+        ("\tfor (fn = __initcall_start; fn < __initcall0_start; fn++)\n"
+         "\t\tdo_one_initcall(*fn);\n",
+         "\tfor (fn = __initcall_start; fn < __initcall0_start; fn++) {\n"
+         "\t\tdo_one_initcall(*fn);\n\t}\n",
+         "\tfor (fn = __initcall_start; fn < __initcall0_start; fn++) {\n",
+         "\t\tDIAG_INITCALL_CHECKPOINT(*fn, \"pre_smp\", "
+         "(unsigned int)(fn - __initcall_start) + 1);\n"),
+        ("\tfor (fn = initcall_levels[level]; "
+         "fn < initcall_levels[level+1]; fn++)\n"
+         "\t\tdo_one_initcall(*fn);\n",
+         "\tfor (fn = initcall_levels[level]; "
+         "fn < initcall_levels[level+1]; fn++) {\n"
+         "\t\tdo_one_initcall(*fn);\n\t}\n",
+         "\tfor (fn = initcall_levels[level]; "
+         "fn < initcall_levels[level+1]; fn++) {\n",
+         "\t\tDIAG_INITCALL_CHECKPOINT(*fn, initcall_level_names[level], "
+         "(unsigned int)(fn - initcall_levels[level]) + 1);\n"),
+    )
+    for old_loop, new_loop, loop_header, hook in initcall_loops:
+        if loop_header not in s:
+            if s.count(old_loop) != 1:
+                print("WARN: initcall loop anchor occurs %d times" %
+                      s.count(old_loop))
+                continue
+            s = s.replace(old_loop, new_loop, 1)
+            print("braced initcall loop for checkpoint instrumentation")
+        if hook.strip() not in s:
+            if s.count(loop_header) != 1:
+                print("WARN: checkpoint loop header occurs %d times" %
+                      s.count(loop_header))
+            else:
+                s = s.replace(loop_header, loop_header + hook, 1)
+                print("inserted per-initcall checkpoint hook")
+
     # A tag-27 hang is still before do_initcalls() if it stalls in one of
     # do_basic_setup()'s setup calls. Breadcrumb each call site as well.
-    for fn in ("cpuset_init_smp", "shmem_init", "driver_init",
-               "init_irq_proc", "do_ctors", "usermodehelper_enable",
-               "do_initcalls"):
+    for checkpoint_id, fn in enumerate(SETUP_CHECKPOINTS, 1):
         anchor = "\t" + fn + "();\n"
+        status = "\tDIAG_SETUP_STATUS(\"" + fn + "\");\n"
         log = "\tpr_emerg(\"DIAG: setup " + fn + "\\n\");\n"
-        if log in s:
-            continue
-        if s.count(anchor) == 1:
-            s = s.replace(anchor, log + anchor, 1)
-            print("inserted setup breadcrumb: %s" % fn)
-        else:
+        hook = "\tDIAG_SETUP_CHECKPOINT(%d, \"%s\");\n" % (checkpoint_id, fn)
+        if s.count(anchor) != 1:
             print("WARN: setup breadcrumb anchor %s occurs %d times"
                   % (fn, s.count(anchor)))
+            continue
+        ins = ""
+        if status not in s:
+            ins += status
+        if log not in s:
+            ins += log
+        if hook not in s:
+            ins += hook
+        if ins:
+            s = s.replace(anchor, ins + anchor, 1)
+            print("inserted setup checkpoint/breadcrumb: %s" % fn)
 
     # The SMC hooks go in separately: main.c already carries the arm hooks
     # from earlier builds, so the EDITS loop above would skip these anchors.
@@ -765,30 +1029,11 @@ def main():
         s = s.replace(anchor, anchor + hook, 1)
         print("inserted %s" % hook.strip())
 
-    # setup_arch() band 15: the linear mapping now exists, so the on-screen
-    # console can start mirroring printk from here on.
-    # printk mirrors to the screen (kernel/printk/printk.c)
+    # Keep printk out of the panel: concurrent vprintk_emit callers race.
     pk = ROOT / "kernel" / "printk" / "printk.c"
     p = pk.read_text()
-    if screen != "0":
-        if "#include <linux/diag_stage.h>" not in p:
-            i = p.index("#include <linux/")
-            p = p[:i] + "#include <linux/diag_stage.h>\n" + p[i:]
-            print("added diag include to printk.c")
-        hook = ("\t#if DIAG_SCREEN\n\tdiag_stage_mirror(text, text_len);\n\t#endif\n")
-        if "diag_stage_mirror(text, text_len);" not in p:
-            # drop a hook from an older generator (it drew into its own,
-            # never-initialised copy of the console state)
-            p = re.sub(r"[ \t]*#if DIAG_SCREEN\n[ \t]*diag_screen_puts\(text, text_len\);\n[ \t]*#endif\n", "", p)
-            anchor = "\treturn log_output(facility, level, lflags,\n"
-            if p.count(anchor) == 1:
-                p = p.replace(anchor, hook + anchor, 1)
-                print("inserted printk->screen hook")
-            else:
-                print("WARN: printk log_output anchor not unique")
-    else:
-        p = p.replace("#include <linux/diag_stage.h>\n", "")
-        p = re.sub(r"[ \t]*#if DIAG_SCREEN\n[ \t]*diag_(stage_mirror|screen_puts)\(text, text_len\);\n[ \t]*#endif\n", "", p)
+    p = p.replace("#include <linux/diag_stage.h>\n", "")
+    p = re.sub(r"[ \t]*#if DIAG_SCREEN\n[ \t]*diag_(stage_mirror|screen_puts)\(text, text_len\);\n[ \t]*#endif\n", "", p)
     pk.write_text(p)
 
     # One report per boot for an invalid notifier, instead of a WARN per idle
@@ -859,8 +1104,7 @@ def main():
             print("added #include <linux/diag_stage.h> to setup.c")
         else:
             print("WARN: include anchor missing in setup.c")
-    # The printk mirror must land in this file's copy of the console state;
-    # see the long comment on diag_stage_mirror() in the header.
+    # Define only shared console state. No printk-to-panel callback.
     old_mirror = (
         "#if DIAG_SCREEN\n"
         "/* the one copy of the panel console that printk mirrors into */\n"
@@ -872,17 +1116,8 @@ def main():
     if old_mirror in t:
         # a previous run inserted the wrapper without the shared instance
         t = t.replace(old_mirror, "", 1)
-    mirror_def = (
-        "#if DIAG_SCREEN\n"
-        "/* the single console instance shared by every translation unit */\n"
-        "struct diag_console diag_state;\n"
-        "\n"
-        "void diag_stage_mirror(const char *text, size_t len)\n"
-        "{\n"
-        "\tdiag_screen_puts(text, len);\n"
-        "}\n"
-        "#endif\n")
-    if "void diag_stage_mirror" not in t:
+    mirror_def = "#if DIAG_SCREEN\nstruct diag_console diag_state;\n#endif\n"
+    if "struct diag_console diag_state;" not in t:
         inc = "#include <linux/diag_stage.h>\n"
         if t.count(inc) == 1:
             t = t.replace(inc, inc + "\n" + mirror_def, 1)

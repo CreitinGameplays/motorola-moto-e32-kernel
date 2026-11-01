@@ -10,35 +10,35 @@
 #                stage.  No MMIO, no clock, works at the first statement of
 #                start_kernel(); the call returns if PSCI does not implement
 #                it, so a normal boot after this build means "SMC unsupported".
-#   paint  0|1   1 = cumulative visual trace: at every stage from 2 to 8 fill
-#                another white band at the bootloader's framebuffer
-#                (phys 0x9e000000, lcd_base).  The panel keeps scanning that
-#                buffer while a half-booted kernel hangs, so the number of
-#                white bands on screen is the last stage reached - no reset,
-#                no ramoops, no console.  Combine with --entry-paint in
-#                pack_and_sign_boot.py, which paints band 0 from an entry
-#                stub that runs with the MMU off.
+#   framebuffer paint/text diagnostics are retired; all builds force them off.
+#   checkpoint  off, setup:<name>, or initcall:<level>:<name|ordinal>
+#                write a breadcrumb and request direct PSCI reset before that
+#                checkpoint. Initcall ordinals are 1-based within the level.
+#   conduit      smc (default/device) or hvc (QEMU virt smoke test only).
 # Reuses the object tree (same KCFLAGS as the v4 build); source changes to
 # other translation units still trigger their own rebuilds.
 set -eo pipefail
 panic_stage="${1:-0}"
 arm_stage="${2:-0}"
 smc_stage="${3:-0}"
-paint="${4:-0}"
-screen="${5:-0}"
-tag="p${panic_stage}a${arm_stage}s${smc_stage}q${paint}c${screen}"
+checkpoint="${4:-off}"
+psci_conduit="${5:-smc}"
+paint=0
+screen=0
+tag="p${panic_stage}a${arm_stage}s${smc_stage}k${checkpoint//:/_}m${psci_conduit}q0c0"
 cd "$HOME/kernel-sprd"
 export PATH="$HOME/toolchains/clang+llvm-11.0.1-x86_64-linux-gnu-ubuntu-20.10/bin:$PATH"
 
-python3 "$HOME/prepare_stage_panics.py" "$panic_stage" "$arm_stage" "$smc_stage" "$paint" "$screen"
-grep -n -E '^#define DIAG_(PANIC_STAGE|ARM_STAGE|ARM_TIMEOUT|SMC_STAGE|PAINT)' include/linux/diag_stage.h
+python3 "$HOME/prepare_stage_panics.py" "$panic_stage" "$arm_stage" "$smc_stage" 0 0 "$checkpoint" "$psci_conduit"
+grep -n -E '^#define DIAG_(PANIC_STAGE|ARM_STAGE|ARM_TIMEOUT|SMC_STAGE|CHECKPOINT_|PSCI_USE_HVC|PAINT)' include/linux/diag_stage.h
 echo "arm hooks: $(grep -c 'DIAG_ARM_HOOK' init/main.c)  smc hooks: $(grep -c 'DIAG_SMC_HOOK' init/main.c)  paint hooks: $(grep -c 'DIAG_PAINT_HOOK' init/main.c)"
+echo "setup checkpoints: $(grep -c 'DIAG_SETUP_CHECKPOINT' init/main.c)  initcall checkpoints: $(grep -c 'DIAG_INITCALL_CHECKPOINT' init/main.c)"
 grep -n 'DIAG_PAINT_HOOK' init/main.c | head -9
 
 cp .config.diagwdt .config
 make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
     CC="clang --target=aarch64-linux-gnu-" LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm \
-    KCFLAGS="-DDIAG_WDT_ARM -DDIAG_WDT_EARLY_INIT -DDIAG_PANIC_AFTER_INIT -DDIAG_KVM_LATE_INIT -DDIAG_EARLY_PAINT" \
+    KCFLAGS="" \
     Image 2>&1 | tail -12
 
 cp arch/arm64/boot/Image "Image.$tag"

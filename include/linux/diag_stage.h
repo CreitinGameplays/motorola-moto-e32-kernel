@@ -17,7 +17,10 @@
 #include <linux/io.h>
 #include <linux/bitops.h>
 #include <linux/arm-smccc.h>
+#include <linux/kallsyms.h>
 #include <linux/mm.h>
+#include <linux/printk.h>
+#include <linux/string.h>
 #include <asm/cacheflush.h>
 #include <asm/barrier.h>
 #include <asm/cputype.h>
@@ -36,9 +39,10 @@
  * buffer is packed RGB888 with a 4800-byte stride.  Writing 32-bit pixels
  * there shears every glyph row by 4/3 (the "straight white lines" artefact).
  *
- * Row 0 is a permanent milestone line: each visual probe appends its band
- * number, so one boot still says how far the kernel got even when it hangs
- * before printing anything.  Rows below hold the printk mirror.
+ * Row 0 is a permanent milestone line; rows 1..3 hold EL/KVM, CPU ID, and
+ * the single current setup/initcall status.  printk mirroring is deliberately
+ * disabled: vprintk_emit() may be entered concurrently by several CPUs, and
+ * drawing there races the shared cursor and overwrites text.
  */
 #if DIAG_SCREEN
 #include <linux/diag_font.h>
@@ -48,10 +52,10 @@
 #define DIAG_FB_ROWS	720U
 #define DIAG_GLYPH_W	8U
 #define DIAG_GLYPH_H	16U
-#define DIAG_SX		3U	/* 24 px wide glyphs */
-#define DIAG_SY		3U	/* 48 px tall glyphs */
+#define DIAG_SX		2U	/* 16 px wide glyphs */
+#define DIAG_SY		2U	/* 32 px tall glyphs */
 #define DIAG_CW		(DIAG_GLYPH_W * DIAG_SX + 2U)	/* 2 px column gap */
-#define DIAG_CH		(DIAG_GLYPH_H * DIAG_SY + 8U)	/* 8 px line gap */
+#define DIAG_CH		(DIAG_GLYPH_H * DIAG_SY + 4U)	/* 4 px line gap */
 #define DIAG_TOP	48U
 #define DIAG_COLS	(DIAG_FB_STRIDE / 3UL / DIAG_CW)
 #define DIAG_ROWS	((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
@@ -276,7 +280,7 @@ static inline void diag_show_initcall(void *fn)
 	char line[DIAG_COLS + 1];
 	int n;
 
-	n = scnprintf(line, sizeof(line), "IC: %pF", fn);
+ n = scnprintf(line, sizeof(line), "INIT: %pF", fn);
 	if (n > 0)
 		diag_screen_head(2, line, (unsigned int)n);
 }
@@ -300,6 +304,8 @@ static inline void diag_screen_init(void)
 #define DIAG_INITCALL_NAME(fn) \
 	do { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
 #define DIAG_SCR_READY diag_state.ready
+#define DIAG_SETUP_STATUS(name) \
+	do { diag_screen_head(2, "SETUP: " name, sizeof("SETUP: " name) - 1); } while (0)
 #else
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
@@ -307,6 +313,7 @@ static inline void diag_screen_init(void) { }
 #define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
 #define DIAG_STAGE_TAG(n) do { } while (0)
+#define DIAG_SETUP_STATUS(name) do { } while (0)
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
@@ -325,28 +332,154 @@ void diag_stage_mirror(const char *text, size_t len);
 #define DIAG_ARM_STAGE 0
 #define DIAG_ARM_TIMEOUT 10
 #define DIAG_SMC_STAGE 0
+#define DIAG_CHECKPOINT_KIND 0
+#define DIAG_CHECKPOINT_SETUP_ID 0
+#define DIAG_CHECKPOINT_LEVEL ""
+#define DIAG_CHECKPOINT_ORDINAL 0
+#define DIAG_CHECKPOINT_NAME ""
+#define DIAG_CHECKPOINT_LABEL "off"
+#define DIAG_PSCI_USE_HVC 0
 
 /*
  * Reset the SoC through the PSCI SYSTEM_RESET function (SMCCC 0x84000009).
  *
- * This is the only reset source usable at the very first statement of
- * start_kernel(): it is a secure-monitor call, so it needs no device mapping,
- * no clock and no driver.  It is also a warm reset, which is what makes the
- * ramoops/pstore region survive and be readable on the next boot.
+ * This reset source is usable at the very first statement of start_kernel():
+ * it is a secure-monitor call, so it needs no device mapping, clock or driver.
+ * The warm reset preserves DRAM. A checkpoint marker is present in ramoops
+ * only if the ramoops console has already initialized; earlier probes rely on
+ * the validated reset outcome (or a separately verified serial capture).
  *
  * If the monitor does not implement the function the call simply returns and
  * the boot continues, so "no reset" must be read as "the code did not run"
  * only after a stage that is known to be reached.
  */
-static inline void diag_psci_reset(void)
+static inline long diag_psci_reset(void)
 {
 	struct arm_smccc_res res;
 
+#if DIAG_PSCI_USE_HVC
+	arm_smccc_hvc(0x84000009UL, 0, 0, 0, 0, 0, 0, 0, &res);
+#else
 	arm_smccc_smc(0x84000009UL, 0, 0, 0, 0, 0, 0, 0, &res);
+#endif
+	return (long)res.a0;
+}
+
+static inline void diag_checkpoint_reset(const char *label)
+{
+	long status;
+
+	dsb(sy);
+	status = diag_psci_reset();
+	pr_emerg("DIAG: PSCI_SYSTEM_RESET returned: checkpoint=%s status=%ld\n",
+		 label, status);
 }
 
 #define DIAG_SMC_HOOK(n) \
-	do { if (DIAG_SMC_STAGE == (n)) diag_psci_reset(); } while (0)
+	do { if (DIAG_SMC_STAGE == (n)) { \
+		char diag_label[16]; \
+		scnprintf(diag_label, sizeof(diag_label), "stage:%d", (n)); \
+		pr_emerg("DIAG: CHECKPOINT reached: %s\n", diag_label); \
+		diag_checkpoint_reset(diag_label); \
+	} } while (0)
+
+#define DIAG_SETUP_CHECKPOINT(id, name) \
+	do { if (DIAG_CHECKPOINT_KIND == 1 && \
+		DIAG_CHECKPOINT_SETUP_ID == (id)) { \
+		pr_emerg("DIAG: CHECKPOINT reached: setup:%s\n", name); \
+		diag_checkpoint_reset("setup:" name); \
+	} } while (0)
+
+static inline int diag_initcall_symbol_name(initcall_t fn, char *symbol)
+{
+	return lookup_symbol_name((unsigned long)fn, symbol);
+}
+
+static inline void diag_log_initcall(initcall_t fn)
+{
+	char symbol[KSYM_NAME_LEN];
+
+	if (diag_initcall_symbol_name(fn, symbol))
+		pr_emerg("DIAG: initcall %#lx\n", (unsigned long)fn);
+	else
+		pr_emerg("DIAG: initcall %s\n", symbol);
+}
+
+struct diag_initcall_symbol_match {
+	const char *name;
+	unsigned long body;
+	unsigned long cfi_jt;
+};
+
+static inline int diag_find_initcall_symbol(void *data, const char *name,
+					    struct module *mod,
+					    unsigned long address)
+{
+	struct diag_initcall_symbol_match *match = data;
+	size_t len = strlen(match->name);
+
+	if (mod || strncmp(name, match->name, len) ||
+	    (name[len] && name[len] != '$' && name[len] != '.'))
+		return 0;
+	if (strstr(name, ".cfi_jt"))
+		match->cfi_jt = address;
+	else
+		match->body = address;
+	return 0;
+}
+
+static inline int diag_initcall_name_matches(initcall_t fn)
+{
+	static int resolved;
+	static unsigned long target, target_cfi;
+
+	if (!resolved) {
+		struct diag_initcall_symbol_match match = {
+			.name = DIAG_CHECKPOINT_NAME,
+		};
+
+		kallsyms_on_each_symbol(diag_find_initcall_symbol, &match);
+		target = match.body;
+		target_cfi = match.cfi_jt;
+		resolved = 1;
+		pr_emerg("DIAG: initcall target %s body=%#lx cfi_jt=%#lx\n",
+			 DIAG_CHECKPOINT_NAME, target, target_cfi);
+	}
+	return (unsigned long)fn == target ||
+	       (unsigned long)fn == target_cfi;
+}
+
+static inline void diag_initcall_checkpoint(initcall_t fn, const char *level,
+					    unsigned int ordinal)
+{
+	char symbol[KSYM_NAME_LEN];
+	int match = 0;
+
+	if (DIAG_CHECKPOINT_KIND == 2)
+		match = !strcmp(level, DIAG_CHECKPOINT_LEVEL) &&
+			ordinal == DIAG_CHECKPOINT_ORDINAL;
+	else if (DIAG_CHECKPOINT_KIND == 3)
+		match = (!DIAG_CHECKPOINT_LEVEL[0] ||
+			 !strcmp(level, DIAG_CHECKPOINT_LEVEL)) &&
+			diag_initcall_name_matches(fn);
+	if (match) {
+		if (!diag_initcall_symbol_name(fn, symbol))
+			pr_emerg("DIAG: CHECKPOINT reached: %s (level=%s ordinal=%u function=%s)\n",
+				 DIAG_CHECKPOINT_LABEL, level, ordinal, symbol);
+		else
+			pr_emerg("DIAG: CHECKPOINT reached: %s (level=%s ordinal=%u function=%#lx)\n",
+				 DIAG_CHECKPOINT_LABEL, level, ordinal,
+				 (unsigned long)fn);
+		dsb(sy);
+		diag_checkpoint_reset(DIAG_CHECKPOINT_LABEL);
+	}
+}
+
+#define DIAG_INITCALL_CHECKPOINT(fn, level, ordinal) \
+	do { if (DIAG_CHECKPOINT_KIND == 2 || DIAG_CHECKPOINT_KIND == 3) \
+		diag_initcall_checkpoint((fn), (level), (ordinal)); } while (0)
+
+#define DIAG_INITCALL_LOG(fn) diag_log_initcall(fn)
 
 #define DIAG_PAINT 0
 

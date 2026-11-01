@@ -891,7 +891,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 	DIAG_INITCALL_NAME(fn);
-	pr_emerg("DIAG: initcall %pF\n", fn);
+	DIAG_INITCALL_LOG(fn);
 
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
@@ -961,8 +961,10 @@ static void __init do_initcall_level(int level)
 		   level, level,
 		   NULL, &repair_env_string);
 
-	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
+	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++) {
+		DIAG_INITCALL_CHECKPOINT(*fn, initcall_level_names[level], (unsigned int)(fn - initcall_levels[level]) + 1);
 		do_one_initcall(*fn);
+	}
 }
 
 static void __init do_initcalls(void)
@@ -983,18 +985,32 @@ static void __init do_initcalls(void)
 static void __init do_basic_setup(void)
 {
 	pr_emerg("DIAG: setup cpuset_init_smp\n");
+	DIAG_SETUP_STATUS("cpuset_init_smp");
+	DIAG_SETUP_CHECKPOINT(1, "cpuset_init_smp");
 	cpuset_init_smp();
 	pr_emerg("DIAG: setup shmem_init\n");
+	DIAG_SETUP_STATUS("shmem_init");
+	DIAG_SETUP_CHECKPOINT(2, "shmem_init");
 	shmem_init();
 	pr_emerg("DIAG: setup driver_init\n");
+	DIAG_SETUP_STATUS("driver_init");
+	DIAG_SETUP_CHECKPOINT(3, "driver_init");
 	driver_init();
 	pr_emerg("DIAG: setup init_irq_proc\n");
+	DIAG_SETUP_STATUS("init_irq_proc");
+	DIAG_SETUP_CHECKPOINT(4, "init_irq_proc");
 	init_irq_proc();
 	pr_emerg("DIAG: setup do_ctors\n");
+	DIAG_SETUP_STATUS("do_ctors");
+	DIAG_SETUP_CHECKPOINT(5, "do_ctors");
 	do_ctors();
 	pr_emerg("DIAG: setup usermodehelper_enable\n");
+	DIAG_SETUP_STATUS("usermodehelper_enable");
+	DIAG_SETUP_CHECKPOINT(6, "usermodehelper_enable");
 	usermodehelper_enable();
 	pr_emerg("DIAG: setup do_initcalls\n");
+	DIAG_SETUP_STATUS("do_initcalls");
+	DIAG_SETUP_CHECKPOINT(7, "do_initcalls");
 	do_initcalls();
 }
 
@@ -1002,8 +1018,10 @@ static void __init do_pre_smp_initcalls(void)
 {
 	initcall_t *fn;
 
-	for (fn = __initcall_start; fn < __initcall0_start; fn++)
+	for (fn = __initcall_start; fn < __initcall0_start; fn++) {
+		DIAG_INITCALL_CHECKPOINT(*fn, "pre_smp", (unsigned int)(fn - __initcall_start) + 1);
 		do_one_initcall(*fn);
+	}
 }
 
 /*
