@@ -125,3 +125,18 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+
+#
+# Local build outputs and boot-experiment artefacts (Moto E32 / hawaii tree).
+# The source of truth for the diag patches is the PC repository
+# patches/kernel-sprd/; see diag/README.md in this tree.
+#
+/Image*
+/System.map*
+/localversion*
+*.dtbo
+*.symversions
+/scripts/module-lto.lds
+/phone.config
+/reconstructed_release.config
+/reconstructed_release_diff_config
