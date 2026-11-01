@@ -24,7 +24,7 @@
 #include <asm/early_ioremap.h>
 #include <asm/fixmap.h>
 #include <asm/virt.h>
-#define DIAG_SCREEN 1
+#define DIAG_SCREEN 0
 
 /*
  * Framebuffer text console.
@@ -296,19 +296,20 @@ static inline void diag_screen_init(void)
 	diag_screen_clear();
 	diag_screen_tag(15);	/* paging_init() just returned */
 }
+#define DIAG_EL_REPORT diag_el_report()
+#define DIAG_INITCALL_NAME(fn) \
+	do { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
+#define DIAG_SCR_READY diag_state.ready
 #else
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
 #define DIAG_EL_REPORT do { } while (0)
 #define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
+#define DIAG_STAGE_TAG(n) do { } while (0)
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
-#define DIAG_EL_REPORT diag_el_report()
-#define DIAG_INITCALL_NAME(fn) \
-	do { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
-#define DIAG_SCR_READY diag_state.ready
 
 /*
  * printk mirror entry point, defined exactly once, in
@@ -347,7 +348,7 @@ static inline void diag_psci_reset(void)
 #define DIAG_SMC_HOOK(n) \
 	do { if (DIAG_SMC_STAGE == (n)) diag_psci_reset(); } while (0)
 
-#define DIAG_PAINT 2
+#define DIAG_PAINT 0
 
 /*
  * Visual stage trace: paint white bands at the bootloader's framebuffer.

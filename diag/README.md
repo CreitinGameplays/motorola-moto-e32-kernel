@@ -109,3 +109,36 @@ stages 2..8) now draw on the milestone line and will say how far
     ~/kernel-diag/patches/   format-patch series + full diff of this branch
     ~/kernel-diag/scripts/   copies of the helper scripts from $HOME
     ~/kernel-diag/configs/   phone.config (vendor config read off the device)
+
+## Headless initcall-hang capture (2026-11-01)
+
+The panel font path is currently disabled in the diagnostic image: the
+operator's photo showed that enlarging glyphs made text less readable. Do not
+use the framebuffer text console as the next debug channel.
+
+Instead the image uses the existing device-tree ramoops reservation at
+`0xfff80000` (256 KiB total; 32 KiB console, 32 KiB record and 32 KiB pmsg).
+`ramoops_init()` is a postcore initcall, so its persistent console is available
+before driver/device initcalls. `init/main.c` emits a one-line `pr_emerg`
+breadcrumb immediately before each initcall, plus before every step in
+`do_basic_setup()`. `ignore_loglevel` is appended to the boot-image command
+line so `console=null loglevel=1` does not filter out the breadcrumbs. The
+last breadcrumb should survive a warm reset in `console-ramoops-0` and name
+the operation/initcall that did not return.
+
+The Spreadtrum AON watchdog driver is registered at `subsys_initcall()` only
+when `DIAG_WDT_EARLY_INIT` is defined. That is after OF clock-provider setup
+but before `device_initcall()` (where KVM init is registered). Its existing
+DIAG probe code arms the real watchdog using the driver's clock/register setup;
+the normal late-initcall feeder takes over if boot continues. A pre-feeder
+stall should therefore reset the SoC instead of requiring a cold power cycle,
+which would erase ramoops. The userspace test image is packed with
+`--cmdline-extra ignore_loglevel` and with `screen=0`.
+
+Build:
+
+    ./diag/stage_build.sh 0 0 0 0 0
+
+Then pack the Image using the stock boot image as base and append
+`ignore_loglevel`. This is a diagnostic-only watchdog/initcall breadcrumb
+change; it is not intended to ship.

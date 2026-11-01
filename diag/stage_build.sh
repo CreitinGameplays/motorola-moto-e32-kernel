@@ -18,8 +18,8 @@
 #                no ramoops, no console.  Combine with --entry-paint in
 #                pack_and_sign_boot.py, which paints band 0 from an entry
 #                stub that runs with the MMU off.
-# Reuses the object tree (same KCFLAGS as the v4 build), so only init/main.c
-# recompiles: seconds, not a full build.
+# Reuses the object tree (same KCFLAGS as the v4 build); source changes to
+# other translation units still trigger their own rebuilds.
 set -eo pipefail
 panic_stage="${1:-0}"
 arm_stage="${2:-0}"
@@ -38,7 +38,7 @@ grep -n 'DIAG_PAINT_HOOK' init/main.c | head -9
 cp .config.diagwdt .config
 make -j2 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
     CC="clang --target=aarch64-linux-gnu-" LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm \
-    KCFLAGS="-DDIAG_WDT_ARM -DDIAG_PANIC_AFTER_INIT -DDIAG_KVM_LATE_INIT -DDIAG_EARLY_PAINT" \
+    KCFLAGS="-DDIAG_WDT_ARM -DDIAG_WDT_EARLY_INIT -DDIAG_PANIC_AFTER_INIT -DDIAG_KVM_LATE_INIT -DDIAG_EARLY_PAINT" \
     Image 2>&1 | tail -12
 
 cp arch/arm64/boot/Image "Image.$tag"

@@ -891,6 +891,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 	DIAG_INITCALL_NAME(fn);
+	pr_emerg("DIAG: initcall %pF\n", fn);
 
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
@@ -981,12 +982,19 @@ static void __init do_initcalls(void)
  */
 static void __init do_basic_setup(void)
 {
+	pr_emerg("DIAG: setup cpuset_init_smp\n");
 	cpuset_init_smp();
+	pr_emerg("DIAG: setup shmem_init\n");
 	shmem_init();
+	pr_emerg("DIAG: setup driver_init\n");
 	driver_init();
+	pr_emerg("DIAG: setup init_irq_proc\n");
 	init_irq_proc();
+	pr_emerg("DIAG: setup do_ctors\n");
 	do_ctors();
+	pr_emerg("DIAG: setup usermodehelper_enable\n");
 	usermodehelper_enable();
+	pr_emerg("DIAG: setup do_initcalls\n");
 	do_initcalls();
 }
 

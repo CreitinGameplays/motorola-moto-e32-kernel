@@ -324,19 +324,20 @@ static inline void diag_screen_init(void)
 	diag_screen_clear();
 	diag_screen_tag(15);\t/* paging_init() just returned */
 }
+#define DIAG_EL_REPORT diag_el_report()
+#define DIAG_INITCALL_NAME(fn) \\
+\tdo { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
+#define DIAG_SCR_READY diag_state.ready
 #else
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
 #define DIAG_EL_REPORT do { } while (0)
 #define DIAG_INITCALL_NAME(fn) do { } while (0)
 #define DIAG_SCR_READY 0
+#define DIAG_STAGE_TAG(n) do { } while (0)
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
-#define DIAG_EL_REPORT diag_el_report()
-#define DIAG_INITCALL_NAME(fn) \\
-\tdo { if (DIAG_SCREEN) diag_show_initcall((void *)(fn)); } while (0)
-#define DIAG_SCR_READY diag_state.ready
 
 /*
  * printk mirror entry point, defined exactly once, in
@@ -676,6 +677,35 @@ def main():
         else:
             s = s.replace(anchor, anchor + "\tDIAG_INITCALL_NAME(fn);\n", 1)
             print("inserted DIAG_INITCALL_NAME(fn) into do_one_initcall")
+    # Keep initcall identification independent of the framebuffer.  A single
+    # high-priority printk immediately before each call is enough to leave the
+    # last attempted initcall in ramoops' circular console buffer, even if the
+    # function never returns (and without initcall_debug's doubled chatter).
+    call_anchor = "\tDIAG_INITCALL_NAME(fn);\n"
+    call_log = "\tpr_emerg(\"DIAG: initcall %pF\\n\", fn);\n"
+    if call_log not in s:
+        if s.count(call_anchor) == 1:
+            s = s.replace(call_anchor, call_anchor + call_log, 1)
+            print("inserted ramoops initcall breadcrumb")
+        else:
+            print("WARN: initcall breadcrumb anchor occurs %d times"
+                  % s.count(call_anchor))
+
+    # A tag-27 hang is still before do_initcalls() if it stalls in one of
+    # do_basic_setup()'s setup calls. Breadcrumb each call site as well.
+    for fn in ("cpuset_init_smp", "shmem_init", "driver_init",
+               "init_irq_proc", "do_ctors", "usermodehelper_enable",
+               "do_initcalls"):
+        anchor = "\t" + fn + "();\n"
+        log = "\tpr_emerg(\"DIAG: setup " + fn + "\\n\");\n"
+        if log in s:
+            continue
+        if s.count(anchor) == 1:
+            s = s.replace(anchor, log + anchor, 1)
+            print("inserted setup breadcrumb: %s" % fn)
+        else:
+            print("WARN: setup breadcrumb anchor %s occurs %d times"
+                  % (fn, s.count(anchor)))
 
     # The SMC hooks go in separately: main.c already carries the arm hooks
     # from earlier builds, so the EDITS loop above would skip these anchors.

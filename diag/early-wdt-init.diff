@@ -1,0 +1,23 @@
+diff --git a/drivers/watchdog/sprd_wdt_fiq.c b/drivers/watchdog/sprd_wdt_fiq.c
+index ba23b7c35e36..f99df74e3789 100644
+--- a/drivers/watchdog/sprd_wdt_fiq.c
++++ b/drivers/watchdog/sprd_wdt_fiq.c
+@@ -500,7 +500,18 @@ static struct platform_driver sprd_watchdog_fiq_driver = {
+ 		.pm = &sprd_wdt_fiq_pm_ops,
+ 	},
+ };
++#ifdef DIAG_WDT_EARLY_INIT
++/* Diagnostic build only: arm the hardware before device_initcalls, where
++ * the suspected stall (notably KVM init) may occur.  Subsys init is late
++ * enough for OF clock providers but still precedes device_initcall(). */
++static int __init sprd_watchdog_fiq_diag_init(void)
++{
++	return platform_driver_register(&sprd_watchdog_fiq_driver);
++}
++subsys_initcall(sprd_watchdog_fiq_diag_init);
++#else
+ module_platform_driver(sprd_watchdog_fiq_driver);
++#endif
+ 
+ MODULE_AUTHOR("Ling Xu <ling_ling.xu@unisoc.com>");
+ MODULE_DESCRIPTION("Spreadtrum Watchdog Timer Controller Driver");
