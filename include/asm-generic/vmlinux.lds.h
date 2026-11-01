@@ -465,6 +465,7 @@
 		*(.text..refcount)					\
 		*(.text..ftrace)					\
 		*(TEXT_CFI_MAIN) 					\
+		*(.text..L.cfi.jumptable .text..L.cfi.jumptable.*) \
 		*(.ref.text)						\
 	MEM_KEEP(init.text)						\
 	MEM_KEEP(exit.text)						\
