@@ -140,3 +140,9 @@ kernel/configs/android-*.cfg
 /phone.config
 /reconstructed_release.config
 /reconstructed_release_diff_config
+
+# Local AVB tooling and packaged boot images (never publish keys).
+/avb-test-key.pem
+/avbtool.py
+/boot_*.img
+/qemu*.log
