@@ -18,6 +18,7 @@
 #include <linux/compat.h>
 #endif
 
+#define SPRD_JPG_MAP_SIZE 0x6000
 #define SPRD_JPG_IOCTL_MAGIC 'm'
 #define JPG_CONFIG_FREQ _IOW(SPRD_JPG_IOCTL_MAGIC, 1, unsigned int)
 #define JPG_GET_FREQ    _IOR(SPRD_JPG_IOCTL_MAGIC, 2, unsigned int)
