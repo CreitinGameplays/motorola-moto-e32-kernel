@@ -20,8 +20,10 @@
 #include <linux/mm.h>
 #include <asm/cacheflush.h>
 #include <asm/barrier.h>
+#include <asm/cputype.h>
 #include <asm/early_ioremap.h>
 #include <asm/fixmap.h>
+#include <asm/virt.h>
 #define DIAG_SCREEN 1
 
 /*
@@ -54,10 +56,27 @@
 #define DIAG_ROWS	((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
 #define DIAG_BG	0x000000U
 
-static bool diag_scr_ready;
-static unsigned int diag_scr_row = 1;	/* row 0 is the milestone line */
-static char diag_trace[DIAG_COLS + 1];
-static unsigned int diag_trace_len;
+/*
+ * The console state is ONE object with external linkage, not a set of
+ * file-scope statics.  This header is included by several translation units
+ * (setup.c, printk.c, init/main.c), and with statics each of them had its own
+ * diag_scr_ready - permanently false everywhere except setup.c.  That is why
+ * the stage tags compiled into init/main.c never appeared on the milestone
+ * line, and why the printk mirror in printk.c drew nothing.  setup.c defines
+ * the single instance.
+ */
+#define DIAG_HEAD	4U	/* row 0: milestones, rows 1..3: permanent info */
+
+struct diag_console {
+	bool ready;
+	unsigned int row;
+	unsigned int trace_len;
+	char trace[DIAG_COLS + 1];
+	unsigned int head_lines;
+	char head[DIAG_HEAD - 1][DIAG_COLS + 1];
+};
+
+extern struct diag_console diag_state;
 
 static inline u8 *diag_screen_row(unsigned int row)
 {
@@ -112,31 +131,58 @@ static inline void diag_screen_clear(void)
 {
 	u8 *fb = diag_screen_row(0);
 	unsigned long y;
+	unsigned int i;
 
 	for (y = 0; y < (unsigned long)(DIAG_FB_ROWS - DIAG_TOP); y++)
 		memset(fb + y * DIAG_FB_STRIDE, 0, DIAG_FB_STRIDE);
 	__flush_dcache_area(fb, (unsigned long)(DIAG_FB_ROWS - DIAG_TOP) *
 			    DIAG_FB_STRIDE);
-	diag_scr_row = 1;
-	if (diag_trace_len)
-		diag_screen_draw(0, diag_trace, diag_trace_len);
+	diag_state.row = DIAG_HEAD;
+	if (diag_state.trace_len)
+		diag_screen_draw(0, diag_state.trace, diag_state.trace_len);
+	for (i = 0; i < diag_state.head_lines; i++)
+		diag_screen_draw(i + 1, diag_state.head[i],
+				 strlen(diag_state.head[i]));
+}
+
+/*
+ * Permanent information rows (1..3).  They survive both scrolling and the
+ * clear() that scrolling performs, so a fact like "which EL did the kernel
+ * boot at" is still readable when the log is long.
+ */
+static inline void diag_screen_head(unsigned int n, const char *text,
+				    unsigned int len)
+{
+	unsigned int i;
+
+	if (n >= DIAG_HEAD - 1)
+		return;
+	if (len > DIAG_COLS)
+		len = DIAG_COLS;
+	for (i = 0; i < len; i++)
+		diag_state.head[n][i] =
+			(text[i] >= 0x20 && text[i] <= 0x7e) ? text[i] : ' ';
+	diag_state.head[n][len] = '\0';
+	if (n + 1 > diag_state.head_lines)
+		diag_state.head_lines = n + 1;
+	diag_screen_draw(n + 1, diag_state.head[n], len);
 }
 
 static inline void diag_screen_puts(const char *text, size_t len)
 {
 	size_t i = 0;
 
-	if (!diag_scr_ready || !text)
+	if (!diag_state.ready || !text)
 		return;
 	while (i < len) {
 		unsigned int n = len - i;
 
 		if (n > DIAG_COLS)
 			n = DIAG_COLS;
-		if (diag_scr_row >= DIAG_ROWS)
+		if (diag_state.row >= DIAG_ROWS)
 			diag_screen_clear();
-		diag_screen_draw(diag_scr_row, text + i, n);
-		diag_scr_row++;
+		diag_screen_draw(diag_state.row, text + i, n);
+		diag_state.row++;
 		i += n;
 	}
 }
@@ -144,36 +190,110 @@ static inline void diag_screen_puts(const char *text, size_t len)
 /* Append a band number to the permanent milestone line. */
 static inline void diag_screen_tag(unsigned int n)
 {
-	if (!diag_scr_ready)
+	if (!diag_state.ready)
 		return;
-	if (diag_trace_len >= 3 &&
-	    diag_trace[diag_trace_len - 3] == '0' + (n / 10) % 10 &&
-	    diag_trace[diag_trace_len - 2] == '0' + n % 10)
+	if (diag_state.trace_len >= 3 &&
+	    diag_state.trace[diag_state.trace_len - 3] == '0' + (n / 10) % 10 &&
+	    diag_state.trace[diag_state.trace_len - 2] == '0' + n % 10)
 		return;	/* no consecutive duplicates */
-	if (diag_trace_len + 4 > DIAG_COLS)
+	if (diag_state.trace_len + 4 > DIAG_COLS)
 		return;
-	diag_trace[diag_trace_len++] = '0' + (n / 10) % 10;
-	diag_trace[diag_trace_len++] = '0' + n % 10;
-	diag_trace[diag_trace_len++] = ' ';
-	diag_trace[diag_trace_len] = '\0';
-	diag_screen_draw(0, diag_trace, diag_trace_len);
+	diag_state.trace[diag_state.trace_len++] = '0' + (n / 10) % 10;
+	diag_state.trace[diag_state.trace_len++] = '0' + n % 10;
+	diag_state.trace[diag_state.trace_len++] = ' ';
+	diag_state.trace[diag_state.trace_len] = '\0';
+	diag_screen_draw(0, diag_state.trace, diag_state.trace_len);
+}
+
+/* Hex without printf: this runs long before any console driver exists. */
+static inline char *diag_hex(char *p, unsigned long long v, unsigned int digits)
+{
+	while (digits--) {
+		unsigned int d = (unsigned int)(v >> (digits * 4)) & 0xf;
+
+		*p++ = d < 10 ? '0' + d : 'a' + d - 10;
+	}
+	return p;
+}
+
+/*
+ * Which exception level did the bootloader enter the kernel at?
+ *
+ * It cannot be asked afterwards: el2_setup() drops to EL1 before any driver
+ * runs, and the "CPU: All CPU(s) started at ELx" line of a normal boot has
+ * long scrolled out of dmesg (pstore only keeps post-console messages).  KVM
+ * on arm64 needs the kernel to have been entered at EL2 (or to run VHE), so
+ * put the raw __boot_cpu_mode[] pair, the is_hyp_mode_available() verdict and
+ * ID_AA64PFR0_EL1 on the permanent rows while the console still works.
+ */
+static inline void diag_el_report(void)
+{
+	char line[DIAG_COLS + 1];
+	const char *verdict;
+	char *p;
+	u64 pfr0;
+
+	asm volatile("mrs %0, id_aa64pfr0_el1" : "=r" (pfr0));
+
+	memcpy(line, "EL bcm=", 7);
+	p = diag_hex(line + 7, __boot_cpu_mode[0], 8);
+	*p++ = '/';
+	p = diag_hex(p, __boot_cpu_mode[1], 8);
+	memcpy(p, " hyp=", 5);
+	p += 5;
+	*p++ = is_hyp_mode_available() ? '1' : '0';
+	*p = '\0';
+	diag_screen_head(0, line, p - line);
+
+	memcpy(line, "PFR0=", 5);
+	p = diag_hex(line + 5, pfr0, 16);
+	memcpy(p, " MIDR=", 6);
+	p = diag_hex(p + 6, read_cpuid_id(), 8);
+	*p = '\0';
+	diag_screen_head(1, line, p - line);
+
+	verdict = is_hyp_mode_available() ?
+		"EL2: KVM can work on this device" :
+		"no EL2 -> KVM impossible here";
+	diag_screen_head(2, verdict, strlen(verdict));
+
+	diag_state.row = DIAG_HEAD;
 }
 
 #define DIAG_TAG(n) diag_screen_tag(n)
 
+/*
+ * Post-setup_arch stages report on the milestone line only: the paint
+ * bands stop at 19, and a tag cannot collide with a band number.
+ */
+#define DIAG_STAGE_TAG(n) \
+	do { if (DIAG_PAINT) DIAG_TAG(n); } while (0)
+
 static inline void diag_screen_init(void)
 {
-	diag_scr_ready = true;
+	diag_state.ready = true;
 	diag_screen_clear();
-	diag_screen_puts("DIAG: milestones on line 1, log below", 39);
 	diag_screen_tag(15);	/* paging_init() just returned */
 }
 #else
 static inline void diag_screen_init(void) { }
 #define DIAG_TAG(n) do { } while (0)
+#define DIAG_EL_REPORT do { } while (0)
+#define DIAG_SCR_READY 0
 #endif
 
 #define DIAG_SCREEN_INIT diag_screen_init()
+#define DIAG_EL_REPORT diag_el_report()
+#define DIAG_SCR_READY diag_state.ready
+
+/*
+ * printk mirror entry point, defined exactly once, in
+ * arch/arm64/kernel/setup.c, next to the console itself.  The state is a
+ * single global now, but keeping one entry point means the mirror cannot
+ * drift from the console (and is the place a lock would go if printk from
+ * several CPUs ever races here).
+ */
+void diag_stage_mirror(const char *text, size_t len);
 
 
 #define DIAG_PANIC_STAGE 0
@@ -237,9 +357,15 @@ static inline void diag_paint(unsigned int band)
 					      band * DIAG_PAINT_BAND);
 	unsigned int i;
 
-	for (i = 0; i < DIAG_PAINT_BAND / sizeof(u64); i++)
-		p[i] = ~0ULL;
-	dsb(sy);
+	/*
+	 * Once the text console is up the band would only overwrite the log it
+	 * is pointing at, so keep the milestone tag and skip the fill.
+	 */
+	if (!DIAG_SCR_READY) {
+		for (i = 0; i < DIAG_PAINT_BAND / sizeof(u64); i++)
+			p[i] = ~0ULL;
+		dsb(sy);
+	}
 	DIAG_TAG(band);
 }
 

@@ -31,6 +31,16 @@
 #include <linux/screen_info.h>
 #include <linux/init.h>
 #include <linux/diag_stage.h>
+
+#if DIAG_SCREEN
+/* the single console instance shared by every translation unit */
+struct diag_console diag_state;
+
+void diag_stage_mirror(const char *text, size_t len)
+{
+	diag_screen_puts(text, len);
+}
+#endif
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
@@ -291,6 +301,11 @@ void __init setup_arch(char **cmdline_p)
 	paging_init();
 	DIAG_TRACE_HOOK(15, 0);
 	DIAG_SCREEN_INIT;
+	/* KVM needs the kernel to have been entered at EL2: record
+	 * what the bootloader actually handed over, while we can
+	 * still draw text on the panel.
+	 */
+	DIAG_EL_REPORT;
 
 	acpi_table_upgrade();
 

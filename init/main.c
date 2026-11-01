@@ -579,6 +579,7 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_ARM_HOOK(2);
 	DIAG_SMC_HOOK(2);
 	DIAG_PAINT_HOOK(2);
+	DIAG_STAGE_TAG(22);
 	DIAG_STAGE_2;
 	/*
 	 * Set up the the initial canary and entropy after arch
@@ -603,6 +604,7 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_ARM_HOOK(3);
 	DIAG_SMC_HOOK(3);
 	DIAG_PAINT_HOOK(3);
+	DIAG_STAGE_TAG(23);
 	DIAG_STAGE_3;
 
 	pr_notice("Kernel command line: %s\n", boot_command_line);
@@ -760,6 +762,7 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_ARM_HOOK(4);
 	DIAG_SMC_HOOK(4);
 	DIAG_PAINT_HOOK(4);
+	DIAG_STAGE_TAG(24);
 	DIAG_STAGE_4;
 
 	acpi_subsystem_init();
@@ -776,6 +779,7 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_ARM_HOOK(5);
 	DIAG_SMC_HOOK(5);
 	DIAG_PAINT_HOOK(5);
+	DIAG_STAGE_TAG(25);
 	DIAG_STAGE_5;
 
 	prevent_tail_call_optimization();
@@ -1073,6 +1077,7 @@ static int __ref kernel_init(void *unused)
 	DIAG_ARM_HOOK(6);
 	DIAG_SMC_HOOK(6);
 	DIAG_PAINT_HOOK(6);
+	DIAG_STAGE_TAG(26);
 	DIAG_STAGE_6;
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
@@ -1153,6 +1158,7 @@ static noinline void __init kernel_init_freeable(void)
 	DIAG_ARM_HOOK(7);
 	DIAG_SMC_HOOK(7);
 	DIAG_PAINT_HOOK(7);
+	DIAG_STAGE_TAG(27);
 	DIAG_STAGE_7;
 
 	smp_init();
@@ -1167,6 +1173,7 @@ static noinline void __init kernel_init_freeable(void)
 	DIAG_ARM_HOOK(8);
 	DIAG_SMC_HOOK(8);
 	DIAG_PAINT_HOOK(8);
+	DIAG_STAGE_TAG(28);
 	DIAG_STAGE_8;
 
 	test_executor_init();

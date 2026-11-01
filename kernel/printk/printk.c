@@ -2021,7 +2021,7 @@ int vprintk_store(int facility, int level,
 		lflags |= LOG_PREFIX|LOG_NEWLINE;
 
 	#if DIAG_SCREEN
-	diag_screen_puts(text, text_len);
+	diag_stage_mirror(text, text_len);
 	#endif
 	return log_output(facility, level, lflags,
 			  dict, dictlen, text, text_len);

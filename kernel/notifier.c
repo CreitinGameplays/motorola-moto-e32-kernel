@@ -71,6 +71,9 @@ static int notifier_chain_unregister(struct notifier_block **nl,
  *	@returns:	notifier_call_chain returns the value returned by the
  *			last notifier function called.
  */
+#include <linux/printk.h>
+static bool diag_bad_notifier_reported;
+
 static int notifier_call_chain(struct notifier_block **nl,
 			       unsigned long val, void *v,
 			       int nr_to_call, int *nr_calls)
@@ -85,7 +88,17 @@ static int notifier_call_chain(struct notifier_block **nl,
 
 #ifdef CONFIG_DEBUG_NOTIFIERS
 		if (unlikely(!func_ptr_is_kernel_text(nb->notifier_call))) {
-			WARN(1, "Invalid notifier called!");
+			/*
+			 * DIAG: report once, naming the block and its callback,
+			 * then keep skipping it.  On this device this is the
+			 * CPU_PM chain, so the stock WARN fires at every
+			 * cpuidle exit and buries the log tail.
+			 */
+			if (!diag_bad_notifier_reported) {
+				diag_bad_notifier_reported = true;
+				pr_err("diag: invalid notifier %px callback=%pS (skipped)\n",
+				       nb, nb->notifier_call);
+			}
 			nb = next_nb;
 			continue;
 		}
