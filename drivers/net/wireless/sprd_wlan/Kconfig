@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0
+config SPRD_WLAN_COMBO
+	tristate "Unisoc SC2355 combo WLAN driver (sprdwl family)"
+	depends on MAC80211 || CFG80211
+	help
+	  Unisoc SC2355 (Marlin3) WLAN driver, the sprdwl_ng family, ported
+	  from the vendor 5.4 source (as kept alive by the mu300-linux
+	  mainline port). Builds sprd_wlan_combo.ko; load it after the WCN
+	  bus (marlin/sdiohal) is up. Say M.

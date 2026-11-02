@@ -351,6 +351,8 @@ int sprdwcn_bus_get_status(void)
 	return bus_ops->get_bus_status();
 }
 
+int sprd_wlan_power_status_sync(int option, int value);
+
 static inline
 int sprdwcn_bus_chn_init(struct mchn_ops_t *ops)
 {

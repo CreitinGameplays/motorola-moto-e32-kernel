@@ -321,3 +321,15 @@ struct sprdwcn_bus_ops *get_wcn_bus_ops(void)
 	return wcn_bus_ops;
 }
 EXPORT_SYMBOL_GPL(get_wcn_bus_ops);
+
+/* WLAN power status shared with the sprd_wlan driver (mu300 helper,
+ * needed by the SC2355 combo driver's power-on/power-off paths). */
+int wlan_status = 1;
+
+int sprd_wlan_power_status_sync(int option, int value)
+{
+	if (option == 1)
+		wlan_status = value;
+	return wlan_status;
+}
+EXPORT_SYMBOL_GPL(sprd_wlan_power_status_sync);
