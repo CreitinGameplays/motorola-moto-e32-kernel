@@ -21,7 +21,7 @@
  */
 
 #include <mali_kbase.h>
-extern void mdbg_crumb(int step);
+#include "mdbg.h"
 #include <mali_kbase_config_defaults.h>
 #include <gpu/mali_kbase_gpu_regmap.h>
 #include <mali_kbase_gator.h>
@@ -4428,8 +4428,8 @@ int power_control_init(struct kbase_device *kbdev)
 	if (!kbdev)
 		return -ENODEV;
 
-	dev_info(kbdev->dev, "MDBG: power_control_init enter\n");
-	mdbg_crumb(63); /* power_control_init entered */
+	MDBG_INFO(kbdev->dev, "MDBG: power_control_init enter\n");
+	MDBG_CRUMB(63); /* power_control_init entered */
 
 	pdev = to_platform_device(kbdev->dev);
 
@@ -5115,8 +5115,8 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 	struct kbase_device *kbdev;
 	int err = 0;
 
-	dev_info(&pdev->dev, "MDBG: kbase_platform_device_probe enter\n");
-	mdbg_crumb(62); /* probe callback entered */
+	MDBG_INFO(&pdev->dev, "MDBG: kbase_platform_device_probe enter\n");
+	MDBG_CRUMB(62); /* probe callback entered */
 
 	mali_kbase_print_cs_experimental();
 
@@ -5368,9 +5368,9 @@ static int __init kbase_driver_init_mdbg(void)
 {
 	int ret;
 
-	mdbg_crumb(60); /* module init entered */
+	MDBG_CRUMB(60); /* module init entered */
 	ret = platform_driver_register(&kbase_platform_driver);
-	mdbg_crumb(61); /* platform_driver_register returned (may not be reached if the probe hangs inside it) */
+	MDBG_CRUMB(61); /* platform_driver_register returned (may not be reached if the probe hangs inside it) */
 	return ret;
 }
 

@@ -38,7 +38,7 @@
 #endif
 
 #include <mali_kbase.h>
-extern void mdbg_crumb(int step);
+#include "mdbg.h"
 #include <backend/gpu/mali_kbase_irq_internal.h>
 #include <backend/gpu/mali_kbase_jm_internal.h>
 #include <backend/gpu/mali_kbase_js_internal.h>
@@ -56,22 +56,22 @@ static int kbase_backend_late_init(struct kbase_device *kbdev)
 {
 	int err;
 
-	dev_info(kbdev->dev, "MDBG: late_init: hwaccess_pm_init enter\n");
+	MDBG_INFO(kbdev->dev, "MDBG: late_init: hwaccess_pm_init enter\n");
 	err = kbase_hwaccess_pm_init(kbdev);
 	if (err)
 		return err;
 
-	dev_info(kbdev->dev, "MDBG: late_init: reset_gpu_init enter\n");
+	MDBG_INFO(kbdev->dev, "MDBG: late_init: reset_gpu_init enter\n");
 	err = kbase_reset_gpu_init(kbdev);
 	if (err)
 		goto fail_reset_gpu_init;
 
-	dev_info(kbdev->dev, "MDBG: late_init: hwaccess_pm_powerup enter\n");
+	MDBG_INFO(kbdev->dev, "MDBG: late_init: hwaccess_pm_powerup enter\n");
 	err = kbase_hwaccess_pm_powerup(kbdev, PM_HW_ISSUES_DETECT);
 	if (err)
 		goto fail_pm_powerup;
 
-	dev_info(kbdev->dev, "MDBG: late_init: backend_timer_init enter\n");
+	MDBG_INFO(kbdev->dev, "MDBG: late_init: backend_timer_init enter\n");
 	err = kbase_backend_timer_init(kbdev);
 	if (err)
 		goto fail_timer;
@@ -256,9 +256,9 @@ int kbase_device_init(struct kbase_device *kbdev)
 	kbase_disjoint_init(kbdev);
 
 	for (i = 0; i < ARRAY_SIZE(dev_init); i++) {
-		dev_info(kbdev->dev, "MDBG: dev_init[%u] %pS enter\n",
+		MDBG_INFO(kbdev->dev, "MDBG: dev_init[%u] %pS enter\n",
 			 i, dev_init[i].init);
-		mdbg_crumb(70 + i); /* dev_init[i] entered */
+		MDBG_CRUMB(70 + i); /* dev_init[i] entered */
 		err = dev_init[i].init(kbdev);
 		if (err) {
 			dev_err(kbdev->dev, "%s error = %d\n",
