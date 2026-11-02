@@ -195,6 +195,12 @@ source "drivers/android/Kconfig"
 
 source "drivers/gpu/trace/Kconfig"
 
+menu "GPU support"
+
+source "drivers/gpu/arm/midgard/Kconfig"
+
+endmenu
+
 source "drivers/nvdimm/Kconfig"
 
 source "drivers/dax/Kconfig"
