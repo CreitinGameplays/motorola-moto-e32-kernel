@@ -5297,6 +5297,7 @@ static const struct of_device_id kbase_dt_ids[] = {
 	{ .compatible = "arm,malit6xx" },
 	{ .compatible = "arm,mali-midgard" },
 	{ .compatible = "arm,mali-bifrost" },
+	{ .compatible = "sprd,mali-natt" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, kbase_dt_ids);

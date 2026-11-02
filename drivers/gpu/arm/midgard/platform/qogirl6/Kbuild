@@ -13,4 +13,4 @@
 #
 
 
-obj-y += mali_kbase_config_qogirl6.o
+mali_kbase-y += $(MALI_PLATFORM_DIR)/mali_kbase_config_qogirl6.o
