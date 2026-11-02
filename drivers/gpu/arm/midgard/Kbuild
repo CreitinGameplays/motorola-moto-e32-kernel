@@ -173,6 +173,9 @@ ccflags-y += -I$(KBASE_PATH) -I$(KBASE_PATH)/debug \
 # Tell the Linux build system from which .o file to create the kernel module
 obj-$(CONFIG_MALI_MIDGARD) += mali_kbase.o
 
+# MDBG: flash crumb recorder (probe instrumentation, miscdata+0xA0000)
+obj-$(CONFIG_MALI_MDBG_CRUMB) += mdbg_crumb.o
+
 # Tell the Linux build system to enable building of our .c files
 mali_kbase-y := $(SRC:.c=.o)
 

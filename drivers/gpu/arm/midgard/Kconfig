@@ -20,6 +20,16 @@
 #
 
 
+config MALI_MDBG_CRUMB
+	tristate "MDBG flash crumb recorder (hang probe instrumentation)"
+	depends on MALI_MIDGARD
+	default n
+	help
+	  Flash-persistent breadcrumb recorder for GPU bring-up probes.
+	  When loaded before mali_kbase, it appends one byte per probe step
+	  to the miscdata partition at +0xA0000, surviving any hang or reset.
+	  Say N for production builds.
+
 menuconfig MALI_MIDGARD
 	tristate "Mali Midgard series support"
 	select GPU_TRACEPOINTS if ANDROID

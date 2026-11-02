@@ -43,6 +43,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/regulator/consumer.h>
+extern void mdbg_crumb(int step);
 #include <linux/nvmem-consumer.h>
 #include <mali_kbase.h>
 #include <mali_kbase_defs.h>
@@ -126,6 +127,8 @@ struct gpu_dvfs_context {
 	struct regmap *gpu_apb_base_ptr;
 	struct regmap *gpu_dvfs_apb_base_ptr;
 
+	struct device *dev;
+
 	u32 gpu_binning;
 };
 
@@ -203,17 +206,29 @@ static inline void mali_freq_init(struct device *dev)
 	const char *auto_efuse = NULL;
 	struct regmap *topdvfs_controller_base_ptr;
 
+	dev_info(dev, "MDBG: freq_init: top-force-shutdown lookup\n");
+	mdbg_crumb(10);
 	gpu_dvfs_ctx.top_force_reg.regmap_ptr =
 		qogirl6_syscon_by_name(dev->of_node, "top-force-shutdown",
 				       gpu_dvfs_ctx.top_force_reg.args);
 	if (!gpu_dvfs_ctx.top_force_reg.regmap_ptr)
 		dev_err(dev, "mali: top-force-shutdown syscon is required\n");
+	dev_info(dev, "MDBG: freq_init: top-force regmap=%p args=%#x/%#x\n",
+		 gpu_dvfs_ctx.top_force_reg.regmap_ptr,
+		 gpu_dvfs_ctx.top_force_reg.args[0],
+		 gpu_dvfs_ctx.top_force_reg.args[1]);
 
 	/* Optional: GPU top power state monitor (absent on this board) */
+	dev_info(dev, "MDBG: freq_init: gpu_top_state lookup\n");
+	mdbg_crumb(11);
 	gpu_dvfs_ctx.gpu_top_state_reg.regmap_ptr =
 		qogirl6_syscon_by_name(dev->of_node, "gpu_top_state",
 				       gpu_dvfs_ctx.gpu_top_state_reg.args);
+	dev_info(dev, "MDBG: freq_init: gpu_top_state regmap=%p\n",
+		 gpu_dvfs_ctx.gpu_top_state_reg.regmap_ptr);
 
+	dev_info(dev, "MDBG: freq_init: topdvfs-controller lookup\n");
+	mdbg_crumb(12);
 	topdvfs_controller_base_ptr =
 		syscon_regmap_lookup_by_phandle(dev->of_node,
 						"topdvfs-controller");
@@ -221,7 +236,11 @@ static inline void mali_freq_init(struct device *dev)
 		dev_err(dev, "mali: topdvfs-controller missing\n");
 		topdvfs_controller_base_ptr = NULL;
 	}
+	dev_info(dev, "MDBG: freq_init: topdvfs regmap=%p\n",
+		 topdvfs_controller_base_ptr);
 
+	dev_info(dev, "MDBG: freq_init: gpu-apb-syscon lookup\n");
+	mdbg_crumb(13);
 	gpu_dvfs_ctx.gpu_apb_base_ptr =
 		syscon_regmap_lookup_by_phandle(dev->of_node,
 						"sprd,gpu-apb-syscon");
@@ -229,7 +248,11 @@ static inline void mali_freq_init(struct device *dev)
 		dev_err(dev, "mali: sprd,gpu-apb-syscon missing\n");
 		gpu_dvfs_ctx.gpu_apb_base_ptr = NULL;
 	}
+	dev_info(dev, "MDBG: freq_init: gpu_apb regmap=%p\n",
+		 gpu_dvfs_ctx.gpu_apb_base_ptr);
 
+	dev_info(dev, "MDBG: freq_init: gpu-dvfs-apb-syscon lookup\n");
+	mdbg_crumb(14);
 	gpu_dvfs_ctx.gpu_dvfs_apb_base_ptr =
 		syscon_regmap_lookup_by_phandle(dev->of_node,
 						"sprd,gpu-dvfs-apb-syscon");
@@ -237,6 +260,8 @@ static inline void mali_freq_init(struct device *dev)
 		dev_err(dev, "mali: sprd,gpu-dvfs-apb-syscon missing\n");
 		gpu_dvfs_ctx.gpu_dvfs_apb_base_ptr = NULL;
 	}
+	dev_info(dev, "MDBG: freq_init: gpu_dvfs_apb regmap=%p\n",
+		 gpu_dvfs_ctx.gpu_dvfs_apb_base_ptr);
 
 	/* DCDC_MM_DVFS_VOLTAGE_VALUE1 */
 	gpu_dvfs_ctx.dvfs_voltage_value1.regmap_ptr = topdvfs_controller_base_ptr;
@@ -347,18 +372,29 @@ static inline void mali_freq_init(struct device *dev)
 		MASK_GPU_DVFS_APB_RF_GPU_CORE_VOL_INDEX7;
 
 	/* Speed bin (optional) */
+	dev_info(dev, "MDBG: freq_init: gpu_bin nvmem read\n");
+	mdbg_crumb(15);
 	ret = sprd_gpu_cal_read(dev->of_node, "gpu_bin",
 				&gpu_dvfs_ctx.gpu_binning);
 	if (ret)
 		dev_warn(dev, "mali: gpu_bin nvmem cell read failed: %d\n", ret);
+	dev_info(dev, "MDBG: freq_init: gpu_binning=%u\n",
+		 gpu_dvfs_ctx.gpu_binning);
 
+	dev_info(dev, "MDBG: freq_init: of_clk_get 0..3\n");
+	mdbg_crumb(16);
 	gpu_dvfs_ctx.clk_gpu_i = of_clk_get(dev->of_node, 0);
 	gpu_dvfs_ctx.clk_gpu_core_eb = of_clk_get(dev->of_node, 1);
 	gpu_dvfs_ctx.clk_gpu_mem_eb = of_clk_get(dev->of_node, 2);
 	gpu_dvfs_ctx.clk_gpu_sys_eb = of_clk_get(dev->of_node, 3);
+	dev_info(dev, "MDBG: freq_init: clks i=%pd core=%pd mem=%pd sys=%pd\n",
+		 gpu_dvfs_ctx.clk_gpu_i, gpu_dvfs_ctx.clk_gpu_core_eb,
+		 gpu_dvfs_ctx.clk_gpu_mem_eb, gpu_dvfs_ctx.clk_gpu_sys_eb);
 
 	clk_cnt = of_clk_get_parent_count(dev->of_node);
 	gpu_dvfs_ctx.gpu_clk_num = clk_cnt - DTS_CLK_OFFSET;
+	dev_info(dev, "MDBG: freq_init: clk_cnt=%d src=%d\n",
+		 clk_cnt, gpu_dvfs_ctx.gpu_clk_num);
 	if (gpu_dvfs_ctx.gpu_clk_num <= 0) {
 		dev_err(dev, "mali: malformed clocks property (%d)\n", clk_cnt);
 		gpu_dvfs_ctx.gpu_clk_num = 0;
@@ -375,6 +411,9 @@ static inline void mali_freq_init(struct device *dev)
 	for (i = 0; i < gpu_dvfs_ctx.gpu_clk_num; i++)
 		gpu_dvfs_ctx.gpu_clk_src[i] =
 			of_clk_get(dev->of_node, i + DTS_CLK_OFFSET);
+	dev_info(dev, "MDBG: freq_init: %u src clocks fetched\n",
+		 gpu_dvfs_ctx.gpu_clk_num);
+	mdbg_crumb(17);
 
 	gpu_dvfs_ctx.freq_list_len = of_property_count_elems_of_size(
 		dev->of_node, "sprd,dvfs-lists", 4 * sizeof(u32));
@@ -494,20 +533,30 @@ static bool mali_top_pwr_state_check(void)
 
 static inline void mali_power_on(void)
 {
-	if (!gpu_dvfs_ctx.top_force_reg.regmap_ptr)
+	if (!gpu_dvfs_ctx.top_force_reg.regmap_ptr) {
+		dev_info(gpu_dvfs_ctx.dev, "MDBG: power_on: no top_force regmap, skip\n");
 		return;
+	}
 
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: power_on: top_force write enter\n");
+	mdbg_crumb(22);
 	regmap_update_bits(gpu_dvfs_ctx.top_force_reg.regmap_ptr,
 			   gpu_dvfs_ctx.top_force_reg.args[0],
 			   gpu_dvfs_ctx.top_force_reg.args[1],
 			   ~gpu_dvfs_ctx.top_force_reg.args[1]);
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: power_on: top_force write done\n");
+	mdbg_crumb(23);
 
 	udelay(100);
 
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: power_on: top_pwr_state_check enter\n");
+	mdbg_crumb(24);
 	if (!mali_top_pwr_state_check()) {
 		pr_err("mali: gpu top not power on\n");
 		WARN_ON(1);
 	}
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: power_on: top_pwr_state_check done\n");
+	mdbg_crumb(25);
 
 	gpu_dvfs_ctx.gpu_power_on = 1;
 }
@@ -563,17 +612,30 @@ static inline void mali_clock_on(void)
 	hwf = of_find_node_by_path("/hwfeature/auto");
 	if (hwf)
 		auto_efuse = (char *)of_get_property(hwf, "efuse", NULL);
+	mdbg_crumb(27);
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: efuse=%s\n",
+		 auto_efuse ? auto_efuse : "(none)");
 
-	for (i = 0; i < gpu_dvfs_ctx.gpu_clk_num; i++)
+	for (i = 0; i < gpu_dvfs_ctx.gpu_clk_num; i++) {
+		dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: src[%d] enable\n", i);
+		mdbg_crumb(28 + (i & 7));
 		qogirl6_clk_enable(gpu_dvfs_ctx.gpu_clk_src[i]);
-
+	}
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: gate enables (i/core/mem/sys)\n");
+	mdbg_crumb(36);
 	qogirl6_clk_enable(gpu_dvfs_ctx.clk_gpu_i);
 	qogirl6_clk_enable(gpu_dvfs_ctx.clk_gpu_core_eb);
 	qogirl6_clk_enable(gpu_dvfs_ctx.clk_gpu_mem_eb);
 	qogirl6_clk_enable(gpu_dvfs_ctx.clk_gpu_sys_eb);
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: gate enables done\n");
+	mdbg_crumb(37);
 	udelay(200);
 
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: top_pwr_state_check\n");
+	mdbg_crumb(38);
 	mali_top_pwr_state_check();
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: top_pwr_state_check done\n");
+	mdbg_crumb(39);
 
 	/*
 	 * The max GPLL source needs to be trimmed on T606/T612 (650 MHz) and
@@ -638,18 +700,26 @@ static inline void mali_clock_on(void)
 	}
 
 	/* program the DVFS update path and select the boot frequency */
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: freq_upd_cfg write\n");
+	mdbg_crumb(40);
 	if (gpu_dvfs_ctx.freq_upd_cfg.regmap_ptr)
 		regmap_update_bits(gpu_dvfs_ctx.freq_upd_cfg.regmap_ptr,
 				   gpu_dvfs_ctx.freq_upd_cfg.args[0],
 				   gpu_dvfs_ctx.freq_upd_cfg.args[1], 1);
 
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: dvfs_index_cfg write\n");
+	mdbg_crumb(41);
 	if (gpu_dvfs_ctx.dvfs_index_cfg.regmap_ptr && gpu_dvfs_ctx.freq_list_len)
 		regmap_update_bits(gpu_dvfs_ctx.dvfs_index_cfg.regmap_ptr,
 				   gpu_dvfs_ctx.dvfs_index_cfg.args[0],
 				   gpu_dvfs_ctx.dvfs_index_cfg.args[1],
 				   gpu_dvfs_ctx.freq_list[gpu_dvfs_ctx.cur_index].dvfs_index);
 
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: qos_config\n");
+	mdbg_crumb(42);
 	mali_qos_config();
+	dev_info(gpu_dvfs_ctx.dev, "MDBG: clock_on: done\n");
+	mdbg_crumb(43);
 
 	gpu_dvfs_ctx.gpu_clock_on = 1;
 }
@@ -671,10 +741,20 @@ static inline void mali_clock_off(void)
 
 static int mali_platform_init(struct kbase_device *kbdev)
 {
+	dev_info(kbdev->dev, "MDBG: platform_init enter\n");
+	mdbg_crumb(20);
+	gpu_dvfs_ctx.dev = kbdev->dev;
+
 	mali_freq_init(kbdev->dev);
+	dev_info(kbdev->dev, "MDBG: platform_init: freq_init done\n");
+	mdbg_crumb(21);
 
 	mali_power_on();
+	dev_info(kbdev->dev, "MDBG: platform_init: power_on done\n");
+	mdbg_crumb(26);
+
 	mali_clock_on();
+	dev_info(kbdev->dev, "MDBG: platform_init: clock_on done\n");
 
 	return 0;
 }

@@ -21,6 +21,7 @@
  */
 
 #include <mali_kbase.h>
+extern void mdbg_crumb(int step);
 #include <mali_kbase_config_defaults.h>
 #include <gpu/mali_kbase_gpu_regmap.h>
 #include <mali_kbase_gator.h>
@@ -85,6 +86,12 @@
 #include <linux/poll.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
+#include <linux/string.h>
+
+#ifndef STRINGIFY
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+#endif
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
@@ -4421,7 +4428,36 @@ int power_control_init(struct kbase_device *kbdev)
 	if (!kbdev)
 		return -ENODEV;
 
+	dev_info(kbdev->dev, "MDBG: power_control_init enter\n");
+	mdbg_crumb(63); /* power_control_init entered */
+
 	pdev = to_platform_device(kbdev->dev);
+
+	/*
+	 * MDBG root-cause fix (2026-11-02, evidence
+	 * docs/evidence/2026-11-02-mali-abort-rootcause.txt):
+	 * the pristine DDK enables the DT clocks itself; on this board the
+	 * first clock is aonapb-gate#9 and clk_enable -> sprd_gate_enable
+	 * -> regmap_read on the AON APB bank raises a Synchronous External
+	 * Abort (0x96000010), killing the CPU. The vendor fork never runs
+	 * this path: the Unisoc platform glue (mali_platform_init ->
+	 * mali_power_on/mali_clock_on) owns the clocks and regulators.
+	 * Skip the stock clock/regulator handling for this platform and
+	 * let the glue do the work (it runs later, from
+	 * kbase_device_early_init -> kbasep_platform_device_init).
+	 */
+	{
+		static const char plat_from_kconfig[] =
+			STRINGIFY(CONFIG_MALI_PLATFORM_NAME);
+
+		if (strstr(plat_from_kconfig, "qogirl6")) {
+			dev_info(kbdev->dev,
+				 "clocks/regulators handled by platform glue, skipping DDK power_control_init\n");
+			kbdev->nr_clocks = 0;
+			kbdev->nr_regulators = 0;
+			return 0;
+		}
+	}
 
 #if defined(CONFIG_REGULATOR)
 	/* Since the error code EPROBE_DEFER causes the entire probing
@@ -5079,6 +5115,9 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 	struct kbase_device *kbdev;
 	int err = 0;
 
+	dev_info(&pdev->dev, "MDBG: kbase_platform_device_probe enter\n");
+	mdbg_crumb(62); /* probe callback entered */
+
 	mali_kbase_print_cs_experimental();
 
 	kbdev = kbase_device_alloc();
@@ -5319,7 +5358,29 @@ static struct platform_driver kbase_platform_driver = {
  * anymore when using Device Tree.
  */
 #ifdef CONFIG_OF
-module_platform_driver(kbase_platform_driver);
+/*
+ * MDBG: replace module_platform_driver() with an explicit init so the
+ * flash crumb trail starts before the platform bus registration (which is
+ * where the CPU may die: driver_register -> probe on this board).
+ */
+
+static int __init kbase_driver_init_mdbg(void)
+{
+	int ret;
+
+	mdbg_crumb(60); /* module init entered */
+	ret = platform_driver_register(&kbase_platform_driver);
+	mdbg_crumb(61); /* platform_driver_register returned (may not be reached if the probe hangs inside it) */
+	return ret;
+}
+
+static void __exit kbase_driver_exit_mdbg(void)
+{
+	platform_driver_unregister(&kbase_platform_driver);
+}
+
+module_init(kbase_driver_init_mdbg);
+module_exit(kbase_driver_exit_mdbg);
 #else
 
 static int __init kbase_driver_init(void)
