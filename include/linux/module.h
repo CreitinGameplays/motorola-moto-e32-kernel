@@ -347,9 +347,9 @@ struct module {
 	const s32 *crcs;
 	unsigned int num_syms;
 
-#ifdef CONFIG_CFI_CLANG
+	/* Kept unconditional: vendor modules were built with CFI on, so this
+	 * field must exist to match their struct module layout. */
 	cfi_check_fn cfi_check;
-#endif
 
 	/* Kernel parameters. */
 #ifdef CONFIG_SYSFS

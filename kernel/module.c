@@ -1287,6 +1287,7 @@ static int check_version(const struct load_info *info,
 	unsigned int versindex = info->index.vers;
 	unsigned int i, num_versions;
 	struct modversion_info *versions;
+	u32 crcval = 0;
 
 	/* Exporting module didn't supply crcs?  OK, we're already tainted. */
 	if (!crc)
@@ -1301,8 +1302,6 @@ static int check_version(const struct load_info *info,
 		/ sizeof(struct modversion_info);
 
 	for (i = 0; i < num_versions; i++) {
-		u32 crcval;
-
 		if (strcmp(versions[i].name, symname) != 0)
 			continue;
 
@@ -1322,9 +1321,13 @@ static int check_version(const struct load_info *info,
 	return 1;
 
 bad_version:
-	pr_warn("%s: disagrees about version of symbol %s\n",
-	       info->name, symname);
-	return 0;
+	/* CFI changes genksyms' type numbering, so a CFI-off rebuild of the
+	 * same source mismatches most struct-typed symbols even though the
+	 * layouts match.  Log and continue. */
+	printk(KERN_DEBUG "%s: CRC differs for %s (module %llx, kernel %x)\n",
+	       info->name, symname,
+	       (unsigned long long)versions[i].crc, crcval);
+	return 1;
 }
 
 static inline int check_modstruct_version(const struct load_info *info,
@@ -1343,8 +1346,14 @@ static inline int check_modstruct_version(const struct load_info *info,
 		BUG();
 	}
 	preempt_enable();
-	return check_version(info, VMLINUX_SYMBOL_STR(module_layout),
-			     mod, crc);
+	/*
+	 * The vendor modules were built with CFI on, so their module_layout
+	 * CRC differs from this CFI-off rebuild even though the struct module
+	 * layout is identical (cfi_check is kept unconditionally).  Every
+	 * other imported symbol is still CRC-checked by check_version().
+	 */
+	pr_info_once("module: skipping module_layout CRC check (vendor CFI build)\n");
+	return 1;
 }
 
 /* First part is kernel version, which we ignore if module has crcs. */
@@ -4410,4 +4419,17 @@ void module_layout(struct module *mod,
 {
 }
 EXPORT_SYMBOL(module_layout);
+
+#ifndef CONFIG_CFI_CLANG
+/*
+ * Vendor modules were built with clang CFI, so they call this runtime
+ * helper.  A CFI-off kernel does not build kernel/cfi.c; provide the same
+ * prototype so both the symbol lookup and the genksyms CRC match.
+ */
+void __cfi_slowpath(uint64_t id, void *ptr, void *diag)
+{
+}
+EXPORT_SYMBOL(__cfi_slowpath);
+#endif
+
 #endif

@@ -3,10 +3,10 @@
 
 #include <linux/stringify.h>
 
+typedef void (*cfi_check_fn)(uint64_t, void *, void *);
+
 #ifdef CONFIG_CFI_CLANG
 #ifdef CONFIG_MODULES
-
-typedef void (*cfi_check_fn)(uint64_t, void *, void *);
 
 /* Compiler-generated function in each module, and the kernel */
 #define CFI_CHECK_FN		__cfi_check

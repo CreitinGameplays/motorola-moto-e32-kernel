@@ -21,9 +21,10 @@ struct timer_list {
 	unsigned long		data;
 	u32			flags;
 
-#ifdef CONFIG_CFI_CLANG
+	/* Kept unconditional: vendor modules were built with CFI on, so the
+	 * field must exist for struct timer_list (and struct device, through
+	 * struct dev_pm_info) to keep the vendor's layout. */
 	void			(*__function)(struct timer_list *);
-#endif
 #ifdef CONFIG_LOCKDEP
 	struct lockdep_map	lockdep_map;
 #endif
