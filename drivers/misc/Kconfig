@@ -564,3 +564,4 @@ source "drivers/misc/sprd_audio/Kconfig"
 source "drivers/misc/sprd_apdu/Kconfig"
 source "drivers/misc/sprd_rf_cable/Kconfig"
 endmenu
+source "drivers/misc/sprdbt_tty/Kconfig"

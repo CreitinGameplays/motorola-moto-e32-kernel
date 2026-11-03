@@ -1,0 +1,6 @@
+config SPRDBT_TTY
+	tristate "Unisoc Marlin Bluetooth tty driver (sprdbt_tty)"
+	help
+	  Unisoc Marlin BT over the WCN bus (SDIO on this board), providing
+	  the ttyBT device Android's BT stack talks to. Port of the
+	  mu300-linux external module. Say M.

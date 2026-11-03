@@ -1,0 +1,17 @@
+#
+# sprdbt_tty.ko - Unisoc Marlin BT over the WCN bus (SDIO on this board)
+#
+# In-tree port of the mu300-linux external module (GPL-2.0, Unisoc
+# sources): the tty core is socket-agnostic (mchn channel ops), only
+# .hif_type differs. This board's Marlin3 is SDIO.
+#
+
+obj-m := sprdbt_tty.o
+
+sprdbt_tty-y := \
+	tty-sdio/tty.o \
+	tty-sdio/rfkill.o \
+	tty-sdio/lpm.o \
+	tty-sdio/alignment/sitm.o
+
+ccflags-y += -I$(src)/tty-sdio -I$(src)/tty-sdio/alignment
