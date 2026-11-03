@@ -485,9 +485,6 @@ struct mm_struct {
 
 	/* store ref to file /proc/<pid>/exe symlink points to */
 	struct file __rcu *exe_file;
-#ifdef CONFIG_MMU_NOTIFIER
-	struct mmu_notifier_mm *mmu_notifier_mm;
-#endif
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !USE_SPLIT_PMD_PTLOCKS
 	pgtable_t pmd_huge_pte; /* protected by page_table_lock */
 #endif
@@ -531,6 +528,14 @@ struct mm_struct {
 
 #ifdef CONFIG_PROTECT_LRU
 	int protect;
+#endif
+	/*
+	 * KVM-only field, moved to the tail so every other field keeps the
+	 * offset the CFI-built vendor modules were compiled with (docs/17,
+	 * section "2026-11-03 (2)").  All kernel access is by name.
+	 */
+#ifdef CONFIG_MMU_NOTIFIER
+	struct mmu_notifier_mm *mmu_notifier_mm;
 #endif
 } __randomize_layout;
 

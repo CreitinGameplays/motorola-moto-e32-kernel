@@ -730,11 +730,6 @@ struct task_struct {
 #endif
 	struct sched_dl_entity		dl;
 
-#ifdef CONFIG_PREEMPT_NOTIFIERS
-	/* List of struct preempt_notifier: */
-	struct hlist_head		preempt_notifiers;
-#endif
-
 #ifdef CONFIG_BLK_DEV_IO_TRACE
 	unsigned int			btrace_seq;
 #endif
@@ -1285,6 +1280,16 @@ struct task_struct {
 
 #if defined(CONFIG_SPRD_DEBUG)
 	unsigned long long		iowait_start;
+#endif
+
+	/*
+	 * KVM-only field, moved to the tail so every other field keeps the
+	 * offset the CFI-built vendor modules were compiled with (docs/17,
+	 * section "2026-11-03 (2)").  All kernel access is by name.
+	 */
+#ifdef CONFIG_PREEMPT_NOTIFIERS
+	/* List of struct preempt_notifier: */
+	struct hlist_head		preempt_notifiers;
 #endif
 
 	/*
