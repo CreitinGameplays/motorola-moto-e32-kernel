@@ -301,6 +301,7 @@ void __init setup_arch(char **cmdline_p)
 	paging_init();
 	DIAG_TRACE_HOOK(15, 0);
 	DIAG_SCREEN_INIT;
+	DIAG_BANNER_INIT;
 	/* KVM needs the kernel to have been entered at EL2: record
 	 * what the bootloader actually handed over, while we can
 	 * still draw text on the panel.

@@ -118,15 +118,27 @@ pe_header:
 	 */
 
 /*
- * DIAG: paint band \band through a *physical* store.  Only valid while the
- * MMU is off, which is exactly where these probes sit (stext).  Clobbers
+ * DIAG: early-boot progress dashes.  A short (320 px, one panel row) dim
+ * dash is stored through a *physical* address at each pre-MMU milestone of
+ * stext, one panel row below the previous and one shade brighter, so a
+ * photo of a hung boot still names the last completed step.  Only valid
+ * while the MMU is off, which is exactly where these probes sit.  Clobbers
  * x9/x10/x11, which the boot path does not use before start_kernel().
+ *
+ * The original diag build painted full-width 128 KB solid-white bands here
+ * (commit c096f1b790c1); in production they showed up as a plain white bar
+ * across the boot logo, so they were replaced by these dashes.  The on-panel
+ * text banner that follows later is drawn from C at setup_arch() time
+ * (include/linux/diag_stage.h, DIAG_BANNER).
  */
-	.macro	diag_probe, band
-	movz	x10, #(((0x9e000000 + (\band) * 0x20000) >> 16) & 0xffff), lsl #16
-	movk	x10, #((0x9e000000 + (\band) * 0x20000) & 0xffff)
-	movn	x9, #0
-	movz	x11, #8192
+	.macro	diag_probe, yrow, shade
+	movz	x10, #(((0x9e000000 + (\yrow) * 4800) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\yrow) * 4800) & 0xffff)
+	movz	x9,  #((\shade) * 0x0101)
+	movk	x9,  #((\shade) * 0x0101), lsl #16
+	movk	x9,  #((\shade) * 0x0101), lsl #32
+	movk	x9,  #((\shade) * 0x0101), lsl #48
+	movz	x11, #60
 9991:	stp	x9, x9, [x10], #16
 	subs	x11, x11, #1
 	b.ne	9991b
@@ -135,12 +147,12 @@ pe_header:
 ENTRY(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
-	diag_probe 22
+	diag_probe 2, 0x2a
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
 	bl	__create_page_tables
-	diag_probe 23
+	diag_probe 3, 0x4a
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
 	 * details.
@@ -148,7 +160,7 @@ ENTRY(stext)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
-	diag_probe 24
+	diag_probe 4, 0x6a
 	b	__primary_switch
 ENDPROC(stext)
 
