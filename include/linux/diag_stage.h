@@ -38,9 +38,18 @@
  * picture survives while a half-booted kernel hangs.  Geometry is measured,
  * not assumed: the command line says lcd_size=1600x720 and logo_bpix=24, and
  * /proc/device-tree/reserved-memory/logobuffer@9e000000 is 11.2 MB, so the
- * buffer is packed RGB888 with a 4800-byte stride.  Writing 32-bit pixels
- * there shears every glyph row by 4/3 (the "straight white lines" artefact).
+ * buffer is packed RGB888 (24 bpp, logo_bpix=24).  Writing 32-bit pixels
+ * there shears every glyph row (the "straight white lines" artefact), so
+ * all painting is byte-wise, three bytes per pixel.
  *
+ * GEOMETRY (measured, twice): the panel is 720x1600 native portrait - the
+ * Android display mode says so (dumpsys: width=720 height=1600,
+ * rotation 0) and the vendor boot-logo BMPs are native-portrait 24-bit
+ * (U-Boot lcd_splash draws them straight into lcd_base; e.g.
+ * samsung_720_1280_24bit.bmp).  The cmdline's lcd_size=1600x720 is
+ * landscape notation ONLY: painting with a 4800-byte stride shears every
+ * row by 2.2 panel rows (the "distorted, overlapping" banner of
+ * 2026-11-04).  Stride = 720 * 3 = 2160, RGB888 packed, p[0]=R.
  * Row 0 is a permanent milestone line; rows 1..3 hold EL/KVM, CPU ID, and
  * the single current setup/initcall status.  printk mirroring is deliberately
  * disabled: vprintk_emit() may be entered concurrently by several CPUs, and
@@ -51,8 +60,8 @@
 #include <generated/utsrelease.h>
 
 #define DIAG_FB_PHYS	0x9e000000UL
-#define DIAG_FB_STRIDE	4800UL	/* 1600 * 3 bytes (logo_bpix=24) */
-#define DIAG_FB_ROWS	720U
+#define DIAG_FB_STRIDE	2160UL	/* 720 * 3 bytes (logo_bpix=24, native PORTRAIT) */
+#define DIAG_FB_ROWS	1600U
 #define DIAG_GLYPH_W	8U
 #define DIAG_GLYPH_H	16U
 #define DIAG_SX		2U	/* 16 px wide glyphs */
@@ -340,51 +349,69 @@ static inline void diag_screen_init(void) { }
  * readable on any logo.
  */
 #if DIAG_BANNER
-#define DIAG_BANNER_ACCENT_RGB	0x0d9488U
-#define DIAG_BANNER_ROW		16U	/* panel px row of the text chip */
+/*
+ * Colors are deliberately byte-order-safe (white / black / gray): the
+ * RGB-vs-BGR byte order of the logo scanout is not confirmed, so no
+ * colored accents until someone photographs a known-color test.
+ */
+#define DIAG_BANNER_ACCENT_RGB	0x707070U
+#define DIAG_BANNER_ROW		16U	/* panel px row of the first text line */
 
-static inline void diag_banner_line(unsigned int y, unsigned int x0,
-				    unsigned int width, u32 rgb)
+static inline void diag_banner_fill(unsigned int y, unsigned int x0,
+				    unsigned int width, unsigned int h,
+				    u32 rgb)
 {
 	u8 *p = (u8 *)phys_to_virt(DIAG_FB_PHYS +
 			(unsigned long)y * DIAG_FB_STRIDE);
-	unsigned int x;
+	unsigned int i, x;
 
-	for (x = 0; x < width; x++)
-		diag_scr_pixel(p + (unsigned long)(x0 + x) * 3UL, rgb);
-	__flush_dcache_area(p, DIAG_FB_STRIDE);
+	for (i = 0; i < h; i++) {
+		u8 *row = p + (unsigned long)i * DIAG_FB_STRIDE;
+
+		for (x = 0; x < width; x++)
+			diag_scr_pixel(row +
+				(unsigned long)(x0 + x) * 3UL, rgb);
+	}
+	__flush_dcache_area(p, (unsigned long)h * DIAG_FB_STRIDE);
+}
+
+static inline void diag_banner_text(unsigned int y, unsigned int x0,
+				    const char *s, unsigned int len)
+{
+	u8 *p = (u8 *)phys_to_virt(DIAG_FB_PHYS +
+			(unsigned long)y * DIAG_FB_STRIDE);
+	unsigned int i;
+
+	for (i = 0; i < len; i++)
+		diag_scr_glyph(p +
+			(unsigned long)(x0 + i * DIAG_CW) * 3UL,
+			(unsigned char)s[i]);
+	__flush_dcache_area(p, (unsigned long)DIAG_CH * DIAG_FB_STRIDE);
 }
 
 static inline void diag_boot_banner(void)
 {
-	static const char msg[] = "moto-e32 custom kernel " UTS_RELEASE
-				  " kvmcompat - booting";
-	const unsigned int cols = sizeof(msg) - 1;
-	const unsigned int width_px = cols * DIAG_CW;
-	const unsigned int x0 = ((DIAG_FB_STRIDE / 3U) - width_px) / 2U;
-	u8 *chip = (u8 *)phys_to_virt(DIAG_FB_PHYS +
-			(unsigned long)DIAG_BANNER_ROW * DIAG_FB_STRIDE);
-	unsigned int i, y;
+	static const char line1[] = "moto-e32 custom kernel";
+	static const char line2[] = UTS_RELEASE " kvmcompat - booting";
+	const unsigned int w1 = (sizeof(line1) - 1) * DIAG_CW;
+	const unsigned int w2 = (sizeof(line2) - 1) * DIAG_CW;
+	const unsigned int w = (w1 > w2) ? w1 : w2;
+	const unsigned int screen_w = DIAG_FB_STRIDE / 3U;
+	const unsigned int x0 = (screen_w - w) / 2U;
 
-	if (width_px >= DIAG_FB_STRIDE / 3U)
-		return;	/* cannot happen: the message is compile-time */
+	if (w >= screen_w)
+		return;	/* cannot happen: the messages are compile-time */
 
-	/* teal accent line, chip width, two px rows above the chip */
-	diag_banner_line(DIAG_BANNER_ROW - 2, x0, width_px,
-			 DIAG_BANNER_ACCENT_RGB);
-	diag_banner_line(DIAG_BANNER_ROW - 1, x0, width_px,
+	/* one dark chip under both lines + a gray accent line on top */
+	diag_banner_fill(DIAG_BANNER_ROW, x0, w, 2 * DIAG_CH, DIAG_BG);
+	diag_banner_fill(DIAG_BANNER_ROW - 2, x0, w, 2,
 			 DIAG_BANNER_ACCENT_RGB);
 
-	/* dark backing chip, then the glyphs */
-	for (y = 0; y < DIAG_CH; y++)
-		memset(chip + (unsigned long)y * DIAG_FB_STRIDE +
-			(unsigned long)x0 * 3UL, 0,
-			(unsigned long)width_px * 3UL);
-	for (i = 0; i < cols; i++)
-		diag_scr_glyph(chip +
-			(unsigned long)(x0 + i * DIAG_CW) * 3UL,
-			(unsigned char)msg[i]);
-	__flush_dcache_area(chip, (unsigned long)DIAG_CH * DIAG_FB_STRIDE);
+	/* the two lines, centered inside the chip */
+	diag_banner_text(DIAG_BANNER_ROW, x0 + (w - w1) / 2U,
+			 line1, sizeof(line1) - 1);
+	diag_banner_text(DIAG_BANNER_ROW + DIAG_CH, x0 + (w - w2) / 2U,
+			 line2, sizeof(line2) - 1);
 }
 #define DIAG_BANNER_INIT diag_boot_banner()
 #else

@@ -119,6 +119,8 @@ pe_header:
 
 /*
  * DIAG: early-boot progress dashes.  A short (320 px, one panel row) dim
+ * dash, at the top-left of the PORTRAIT 720x1600 logo buffer (stride
+ * 2160 = 720 * 3, RGB888; see include/linux/diag_stage.h).
  * dash is stored through a *physical* address at each pre-MMU milestone of
  * stext, one panel row below the previous and one shade brighter, so a
  * photo of a hung boot still names the last completed step.  Only valid
@@ -132,8 +134,8 @@ pe_header:
  * (include/linux/diag_stage.h, DIAG_BANNER).
  */
 	.macro	diag_probe, yrow, shade
-	movz	x10, #(((0x9e000000 + (\yrow) * 4800) >> 16) & 0xffff), lsl #16
-	movk	x10, #((0x9e000000 + (\yrow) * 4800) & 0xffff)
+	movz	x10, #(((0x9e000000 + (\yrow) * 2160) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\yrow) * 2160) & 0xffff)
 	movz	x9,  #((\shade) * 0x0101)
 	movk	x9,  #((\shade) * 0x0101), lsl #16
 	movk	x9,  #((\shade) * 0x0101), lsl #32
