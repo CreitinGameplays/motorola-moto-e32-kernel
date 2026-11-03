@@ -66,6 +66,16 @@
 #define GPU_768M_FREQ       768000000
 #define GPU_850M_FREQ       850000000
 
+/*
+ * Experimental: keep the untrimmed DTS DVFS levels (768/850 MHz @ 800 mV,
+ * the T615/T620 table) instead of the T606/T612 650 MHz GPLL trim.
+ * Default 0 = exactly the stock behavior.  See docs/20-gpu-clock-dvfs.md.
+ */
+static bool untrim_gpll;
+module_param(untrim_gpll, bool, 0444);
+MODULE_PARM_DESC(untrim_gpll,
+		 "keep the DTS 768/850 MHz GPU levels (skip the T606 GPLL trim)");
+
 struct gpu_qos_config {
 	u8 arqos;
 	u8 awqos;
@@ -459,8 +469,8 @@ static inline void mali_freq_init(struct device *dev)
 	if (hwf)
 		auto_efuse = (char *)of_get_property(hwf, "efuse", NULL);
 
-	if (auto_efuse && (!strcmp(auto_efuse, "T606") ||
-			   !strcmp(auto_efuse, "T612"))) {
+	if (!untrim_gpll && auto_efuse &&
+	    (!strcmp(auto_efuse, "T606") || !strcmp(auto_efuse, "T612"))) {
 		/* GPLL max frequency for T606/T612 is 650 MHz */
 		gpu_dvfs_ctx.freq_list[gpu_dvfs_ctx.freq_list_len - 1].freq =
 			T606_GPLL_FREQ / FREQ_KHZ;
@@ -643,13 +653,23 @@ static inline void mali_clock_on(void)
 	 */
 	if (auto_efuse && gpu_dvfs_ctx.freq_list_len) {
 		int last = gpu_dvfs_ctx.freq_list_len - 1;
+		unsigned long want = (unsigned long)
+			gpu_dvfs_ctx.freq_list[last].freq * FREQ_KHZ;
+		unsigned long got;
 
-		if (!strcmp(auto_efuse, "T606") ||
-		    !strcmp(auto_efuse, "T612") ||
-		    !strcmp(auto_efuse, "T616"))
-			clk_set_rate(gpu_dvfs_ctx.freq_list[last].clk_src,
-				     (unsigned long)gpu_dvfs_ctx.freq_list[last].freq *
-					     FREQ_KHZ);
+		if (untrim_gpll) {
+			/* experimental: ask for the DTS rate (850 MHz on
+			 * T606) and log what the PLL actually grants */
+			got = clk_set_rate(gpu_dvfs_ctx.freq_list[last].clk_src,
+					   want);
+			dev_info(gpu_dvfs_ctx.dev,
+				 "mali: untrim_gpll: requested %lu Hz on the top GPLL source, granted %lu Hz\n",
+				 want, got);
+		} else if (!strcmp(auto_efuse, "T606") ||
+			   !strcmp(auto_efuse, "T612") ||
+			   !strcmp(auto_efuse, "T616")) {
+			clk_set_rate(gpu_dvfs_ctx.freq_list[last].clk_src, want);
+		}
 	}
 
 	/* Program the core voltage index map for the detected speed bin. */
@@ -939,9 +959,9 @@ void kbase_platform_limit_max_freq(struct device *dev)
 	if (hwf)
 		auto_efuse = (char *)of_get_property(hwf, "efuse", NULL);
 
-	if (auto_efuse && (!strcmp(auto_efuse, "T606") ||
-			   !strcmp(auto_efuse, "T612") ||
-			   !strcmp(auto_efuse, "T616"))) {
+	if (!untrim_gpll && auto_efuse &&
+	    (!strcmp(auto_efuse, "T606") || !strcmp(auto_efuse, "T612") ||
+	     !strcmp(auto_efuse, "T616"))) {
 		dev_pm_opp_disable(dev, GPU_768M_FREQ);
 		dev_pm_opp_disable(dev, GPU_850M_FREQ);
 		dev_pm_opp_add(dev,
