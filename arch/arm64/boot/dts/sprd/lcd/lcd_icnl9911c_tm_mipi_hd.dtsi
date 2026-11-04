@@ -1,0 +1,111 @@
+/*
+ * icnl9911c Truly LCD config dtsi file for spreadtrum
+ *
+ * Copyright (C) 2021, Spreadtrum Communications Inc.
+ *
+ * SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+ */
+
+/ {
+	fragment {
+		target-path = "/";
+		__overlay__ {
+			lcds {
+			lcd_icnl9911c_tm_mipi_hd: lcd_icnl9911c_tm_mipi_hd {
+
+				sprd,dsi-work-mode = <1>; /* video burst mode*/
+				sprd,dsi-lane-number = <4>;
+				sprd,dsi-color-format = "rgb888";
+
+				sprd,phy-bit-clock = <776000>;	/* kbps */
+				sprd,phy-escape-clock = <20000>;/* kHz */
+				sprd,width-mm = <68>;
+				sprd,height-mm = <121>;
+
+				sprd,esd-check-enable = <1>;
+				sprd,esd-check-mode = <1>;
+				sprd,esd-check-period = <2000>;
+				sprd,esd-check-regs = <0xA>;
+				sprd,esd-return-code = <0x9c>;
+
+				sprd,dpi-clk-div = <6>;
+				sprd,video-lp-cmd-enable = <1>;
+				sprd,hporch-lp-disable = <1>;
+				sprd,reset-on-sequence = <0 15>, <1 10>;
+				sprd,reset-off-sequence = <1 5>;
+
+					sprd,initial-command = [
+						39 00 00 03 F0 5A 59
+						39 00 00 03 F1 A5 A6
+						23 00 00 02 F6 30
+						39 00 00 04 FA 45 93 01
+						39 00 00 0B BD E9 02 4E CF 72 A4 08 44 AE 15
+						39 00 00 0B BE 63 6D 50 32 0C 77 43 07 0E 0E
+						39 00 00 14 C1 C0 20 20 96 04 20 30 04 2A 40 36 00 07 CF FF FF 7C 01 C0
+						39 00 00 16 CB 05 40 55 40 04 40 35 43 43 50 1E 40 40 43 43 64 23 40 40 22 04
+						23 00 00 02 FE EF
+						39 00 00 18 E1 EF FE FE FE FE EE F0 20 33 FF 00 00 6A 90 C0 0D 6A F0 3E FF 00 07 D0
+						39 00 00 1B E0 30 00 80 88 11 3F 22 62 DF A0 04 CC 01 FF F6 FF F0 FD FF FD F8 F5 FC FC FD FF
+						39 00 00 03 F1 5A 59
+						39 00 00 03 F0 A5 A6
+						23 00 00 02 35 00
+						39 00 00 02 51 00 
+						23 00 00 02 53 2C
+						23 00 00 02 55 01
+						23 78 00 02 11 00
+						23 0A 00 02 29 00
+						23 00 00 02 26 02
+						];
+					sprd,sleep-in-command =  [
+						23 00 00 02 26 08
+						13 0A 00 01 28
+						13 78 00 01 10
+						];
+					sprd,sleep-out-command = [
+						13 78 00 01 11
+						13 0A 00 01 29
+						23 00 00 02 26 02
+						];
+
+					oled-backlight {
+						default-brightness-level = <33>;
+						sprd,max-level = <255>;
+
+						brightness-levels = [
+							23 00 00 02 51 FF
+							];
+						};
+
+					display-timings {
+						native-mode = <&lcd_icnl9911c_tm_mipi_hd_timing0>;
+
+						lcd_icnl9911c_tm_mipi_hd_timing0: timing0 {
+							clock-frequency = <129230000>;
+							hactive = <720>;
+							vactive = <1600>;
+							hback-porch = <32>;
+							hfront-porch = <48>;
+							vback-porch = <32>;
+							vfront-porch = <160>;
+							hsync-len = <4>;
+							vsync-len = <4>;
+						};
+
+						lcd_icnl9911c_tm_mipi_hd_timing1: timing1 {
+							clock-frequency = <129230000>;
+							hactive = <720>;
+							vactive = <1600>;
+							hback-porch = <36>;
+							hfront-porch = <48>;
+							vback-porch = <32>;
+							vfront-porch = <1020>;
+							hsync-len = <4>;
+							vsync-len = <4>;
+						};
+
+					};
+				};
+			};
+		};
+	};
+};
