@@ -42,23 +42,22 @@
  * there shears every glyph row (the "straight white lines" artefact), so
  * all painting is byte-wise, three bytes per pixel.
  *
- * GEOMETRY (settled from vendor data, not from guessing): the logo
- * partition (sda12) holds gzip-compressed BMPs, all 720x1600 24-bpp,
- * whose CONTENT is drawn rotated 90 degrees inside the BMP (e.g. the
- * battery-charging image is stored lying on its side).  The bootloader
- * therefore transposes the picture on the way into lcd_base: the
- * memory buffer is a 1600x720 LANDSCAPE raster (stride 4800 = 1600*3,
- * 720 rows) and the panel shows it ROTATED:
+ * GEOMETRY (settled by experiment, 2026-11-04): the logo partition
+ * (sda12) holds gzip-compressed BMPs that are 720x1600 24-bpp with the
+ * picture UPRIGHT in the canvas (content bounding boxes are taller than
+ * wide), and the panel's DRM mode is 720x1600.  The bootloader therefore
+ * copies the BMP straight into lcd_base: the framebuffer is PORTRAIT,
+ * 720 columns x 1600 rows, stride 2160 = 720 * 3, displayed 1:1.
  *
- *     physical X (0..719, across)  = buffer row
- *     physical Y (0..1599, down)   = buffer column
+ *   buffer element  = panel element   (row = Y down, column = X right)
  *
- * That reproduces the v1 panel photo exactly (text painted at buffer
- * rows 14..48 / columns 341..1259 shows up as a vertical strip near
- * the left edge, 21%..79% down) and it explains both failed attempts:
- * v2's 2160-byte stride sheared every row, and v3's "bar along buffer
- * rows 0..1" became a 2-px dim sliver on the extreme left edge.  The
- * stride 4800 was right all along; only the orientation was wrong.
+ * History of the earlier wrong guesses, kept because they explain the
+ * artefacts: the cmdline's lcd_size=1600x720 describes the panel in its
+ * native landscape orientation, not the buffer, and two of the charging
+ * BMPs (720x800) do hold sideways content.  Painting with the 4800-byte
+ * landscape stride into the real 2160-byte buffer shears every row onto
+ * a lattice of columns about 80 px apart (the "several vertical dotted
+ * bars" of v4), and painting "a bar along rows 0..1" was invisible.
  * RGB888 packed; per-channel byte order unconfirmed - keep indicator
  * colors byte-symmetric (gray/white/black).
  * Row 0 is a permanent milestone line; rows 1..3 hold EL/KVM, CPU ID, and
@@ -67,8 +66,8 @@
  * drawing there races the shared cursor and overwrites text.
  */
 #define DIAG_FB_PHYS	0x9e000000UL
-#define DIAG_FB_STRIDE	4800UL	/* 1600 * 3 bytes; the cmdline lcd_size IS the buffer layout */
-#define DIAG_FB_ROWS	720U
+#define DIAG_FB_STRIDE	2160UL	/* 720 * 3 bytes: PORTRAIT 720x1600, shown 1:1 */
+#define DIAG_FB_ROWS	1600U
 
 #if DIAG_SCREEN
 #include <linux/diag_font.h>
@@ -341,14 +340,12 @@ static inline void diag_screen_init(void) { }
 #define DIAG_SCREEN_INIT diag_screen_init()
 
 /*
- * Production boot indicator (DIAG_BANNER): a progress bar of solid
- * rectangles along the panel's physical top edge, mirrored along the
- * bottom edge so any rotation/flip of the scanout still reads the same.
- * With physical X = buffer row, the bar is an 8-px-thick strip at
- * buffer columns 0..7 (top) and 1592..1599 (bottom), running along
- * buffer rows 8..704 in 12 segments of 58 rows:
+ * Production boot indicator (DIAG_BANNER): a 16-px-tall progress bar of
+ * solid rectangles at panel rows 24..39 (X = 72..648, 12 segments of
+ * 48 px), mirrored at rows 1560..1575 so a vertically flipped scanout
+ * reads the same.  Segments fill left to right:
  *
- *   head.S  dim track (0x30) + segments 0,1,2 (0x60/0x88/0xa8)
+ *   head.S  dim track + segments 0,1,2 (0x28 then 0x60/0x90/0xb8)
  *   setup.c segments 0..7  (0xb8)   right after paging_init()
  *   main.c  segments 8..11 (0xe8)   after do_basic_setup()
  *
@@ -357,53 +354,67 @@ static inline void diag_screen_init(void) { }
  * are byte-symmetric gray (per-channel byte order unconfirmed).
  */
 #if DIAG_BANNER
-#define DIAG_BAR_ROW0	8U		/* first bar row   (physical X) */
-#define DIAG_BAR_SEG	58U		/* rows per segment (physical X) */
+#define DIAG_BAR_X0	72U		/* first pixel column  */
+#define DIAG_BAR_SEG	48U		/* pixels per segment  */
 #define DIAG_BAR_SEGS	12U
-#define DIAG_BAR_PX	8U		/* bar thickness    (physical Y) */
-#define DIAG_BAR_COL0	0U		/* top edge    ... */
-#define DIAG_BAR_COL1	((DIAG_FB_STRIDE / 3U) - DIAG_BAR_PX)	/* ... bottom */
-#define DIAG_BAR_BYTES	(DIAG_BAR_PX * 3U)
+#define DIAG_BAR_ROWS	16U		/* bar thickness, rows */
+#define DIAG_BAR_TOP	24U		/* first bar row       */
+#define DIAG_BAR_BOT	(DIAG_FB_ROWS - DIAG_BAR_TOP - DIAG_BAR_ROWS)
+#define DIAG_BAR_TRACK	0x28U
 #define DIAG_BAR_SHADE	0xb8U
 #define DIAG_BAR_SHADE_FULL 0xe8U
 
-static inline void diag_bar_store(u8 *p, u8 shade)
+/* one 8-byte-per-store run of `npix` pixels on row y, starting at column x */
+static inline void diag_bar_run(u8 *base, unsigned int y, unsigned int x,
+				unsigned int npix, u8 shade)
 {
 	u64 pat = 0x0101010101010101ULL * shade;
+	u8 *p = base + (unsigned long)y * DIAG_FB_STRIDE + (unsigned long)x * 3UL;
 	unsigned int i;
 
-	for (i = 0; i < DIAG_BAR_BYTES; i += 8)
+	for (i = 0; i < npix * 3U; i += 8)
 		*(u64 *)(p + i) = pat;
 }
 
-static inline void diag_bar_fill(unsigned int r0, unsigned int r1, u8 shade)
+/* a rectangle at rows [DIAG_BAR_TOP, DIAG_BAR_TOP + DIAG_BAR_ROWS) plus
+ * its mirror near the bottom edge */
+static inline void diag_bar_rect(unsigned int x, unsigned int npix, u8 shade)
 {
 	u8 *base = (u8 *)phys_to_virt(DIAG_FB_PHYS);
-	unsigned int r;
+	unsigned int y;
 
-	if (r0 >= DIAG_FB_ROWS || r1 > DIAG_FB_ROWS || r0 >= r1)
+	if (x >= DIAG_FB_STRIDE / 3UL || npix > DIAG_FB_STRIDE / 3UL - x)
 		return;
 
-	for (r = r0; r < r1; r++) {
-		u8 *row = base + (unsigned long)r * DIAG_FB_STRIDE;
-
-		diag_bar_store(row + DIAG_BAR_COL0 * 3UL, shade);
-		diag_bar_store(row + DIAG_BAR_COL1 * 3UL, shade);
+	for (y = 0; y < DIAG_BAR_ROWS; y++) {
+		diag_bar_run(base, DIAG_BAR_TOP + y, x, npix, shade);
+		diag_bar_run(base, DIAG_BAR_BOT + y, x, npix, shade);
 	}
-	__flush_dcache_area(base + (unsigned long)r0 * DIAG_FB_STRIDE,
-			    (unsigned long)(r1 - r0) * DIAG_FB_STRIDE);
+	__flush_dcache_area(base + (unsigned long)DIAG_BAR_TOP * DIAG_FB_STRIDE,
+			    (unsigned long)DIAG_BAR_ROWS * DIAG_FB_STRIDE);
+	__flush_dcache_area(base + (unsigned long)DIAG_BAR_BOT * DIAG_FB_STRIDE,
+			    (unsigned long)DIAG_BAR_ROWS * DIAG_FB_STRIDE);
+}
+
+/* the dim track the segments are drawn on */
+static inline void diag_bootbar_track(void)
+{
+	diag_bar_rect(DIAG_BAR_X0, DIAG_BAR_SEGS * DIAG_BAR_SEG, DIAG_BAR_TRACK);
 }
 
 /* fill segments [seg0, seg1) of the boot progress bar */
 static inline void diag_bootbar(unsigned int seg0, unsigned int seg1,
 				u8 shade)
 {
+	unsigned int s;
+
 	if (seg0 >= DIAG_BAR_SEGS || seg1 > DIAG_BAR_SEGS || seg0 >= seg1)
 		return;
-	diag_bar_fill(DIAG_BAR_ROW0 + seg0 * DIAG_BAR_SEG,
-		      DIAG_BAR_ROW0 + seg1 * DIAG_BAR_SEG, shade);
+	for (s = seg0; s < seg1; s++)
+		diag_bar_rect(DIAG_BAR_X0 + s * DIAG_BAR_SEG, DIAG_BAR_SEG, shade);
 }
-#define DIAG_BANNER_INIT diag_bootbar(0, 8, DIAG_BAR_SHADE)
+#define DIAG_BANNER_INIT \
+	(diag_bootbar_track(), diag_bootbar(0, 8, DIAG_BAR_SHADE))
 #define DIAG_BOOTBAR_FULL diag_bootbar(8, 12, DIAG_BAR_SHADE_FULL)
 #else
 #define DIAG_BANNER_INIT do { } while (0)
