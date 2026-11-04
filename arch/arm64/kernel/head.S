@@ -118,31 +118,32 @@ pe_header:
 	 */
 
 /*
- * DIAG: boot progress bar, pre-MMU segments.  The panel displays the
- * logo buffer ROTATED 90 degrees (buffer x = panel y down, buffer y =
- * panel x right; see include/linux/diag_stage.h), so the on-panel top
- * edge is buffer rows 0..1 and the bar runs along buffer x.  Each
- * pre-MMU milestone fills one more 132 px segment (two 396-byte runs,
- * one per buffer row), one shade brighter - a photo of a hung boot
- * names the last completed step.  The stores are physical and only
- * valid while the MMU is off, which is exactly where these probes sit;
- * they clobber x9/x10/x11, which the boot path does not use before
- * start_kernel().  Segments 3..7 (paging done) and 8..11 (all
- * initcalls done) are filled from C: include/linux/diag_stage.h,
- * DIAG_BANNER.  The full-width 128 KB white bands of the diag build
- * (commit c096f1b790c1) are gone; the two text banner attempts
- * (ef9fac793281, ecdf289b7473) never rendered cleanly under the
- * rotated scanout and were dropped.
+ * DIAG: boot progress bar, pre-MMU part.  The panel displays the logo
+ * buffer ROTATED 90 degrees, so a horizontal bar on the physical top
+ * edge is an 8-px-wide strip at buffer columns 0..7, running along the
+ * buffer rows (measurement in include/linux/diag_stage.h).  Here: the
+ * dim track (rows 8..704) and the first three 58-row segments, each
+ * one shade brighter - a photo of a hung boot names the last completed
+ * step.  The stores are physical and only valid while the MMU is off,
+ * which is exactly where these probes sit.  Clobbers x9..x12, scratch
+ * registers that are not live at these points.
+ *
+ * The mirror strip on the physical bottom edge (buffer columns
+ * 1592..1599) is painted from C once paging works, so a pre-MMU hang
+ * shows the bar on one edge and a later hang on both.
  */
-	.macro	diag_bar, off, len, shade
-	movz	x10, #(((0x9e000000 + (\off)) >> 16) & 0xffff), lsl #16
-	movk	x10, #((0x9e000000 + (\off)) & 0xffff)
+	.macro	diag_bar, row0, rows, shade
+	movz	x10, #(((0x9e000000 + (\row0) * 4800) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\row0) * 4800) & 0xffff)
 	movz	x9,  #((\shade) * 0x0101)
 	movk	x9,  #((\shade) * 0x0101), lsl #16
 	movk	x9,  #((\shade) * 0x0101), lsl #32
 	movk	x9,  #((\shade) * 0x0101), lsl #48
-	movz	x11, #(((\len) + 15) / 16)
-9991:	stp	x9, x9, [x10], #16
+	movz	x11, #(\rows)
+	movz	x12, #4800
+9991:	stp	x9, x9, [x10]
+	str	x9, [x10, #16]
+	add	x10, x10, x12
 	subs	x11, x11, #1
 	b.ne	9991b
 	.endm
@@ -150,14 +151,13 @@ pe_header:
 ENTRY(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
-	diag_bar 24, 396, 0x2a
-	diag_bar 4824, 396, 0x2a
+	diag_bar 8, 696, 0x30
+	diag_bar 8, 58, 0x60
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
 	bl	__create_page_tables
-	diag_bar 420, 396, 0x4a
-	diag_bar 5220, 396, 0x4a
+	diag_bar 66, 58, 0x88
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
 	 * details.
@@ -165,8 +165,7 @@ ENTRY(stext)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
-	diag_bar 816, 396, 0x6a
-	diag_bar 5616, 396, 0x6a
+	diag_bar 124, 58, 0xa8
 	b	__primary_switch
 ENDPROC(stext)
 
