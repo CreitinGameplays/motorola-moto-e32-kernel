@@ -1191,6 +1191,7 @@ static noinline void __init kernel_init_freeable(void)
 
 	do_basic_setup();
 	DIAG_STAGE_8;
+	DIAG_BOOTBAR_FULL;
 	DIAG_ARM_HOOK(8);
 	DIAG_SMC_HOOK(8);
 	DIAG_PAINT_HOOK(8);

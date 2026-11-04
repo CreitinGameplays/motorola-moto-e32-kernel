@@ -29,7 +29,7 @@
 #include <asm/fixmap.h>
 #include <asm/virt.h>
 #define DIAG_SCREEN 0
-#define DIAG_BANNER 1	/* production: one-shot on-panel boot banner */
+#define DIAG_BANNER 1	/* production: on-panel boot progress bar */
 
 /*
  * Framebuffer text console.
@@ -42,26 +42,27 @@
  * there shears every glyph row (the "straight white lines" artefact), so
  * all painting is byte-wise, three bytes per pixel.
  *
- * GEOMETRY (measured, twice): the panel is 720x1600 native portrait - the
- * Android display mode says so (dumpsys: width=720 height=1600,
- * rotation 0) and the vendor boot-logo BMPs are native-portrait 24-bit
- * (U-Boot lcd_splash draws them straight into lcd_base; e.g.
- * samsung_720_1280_24bit.bmp).  The cmdline's lcd_size=1600x720 is
- * landscape notation ONLY: painting with a 4800-byte stride shears every
- * row by 2.2 panel rows (the "distorted, overlapping" banner of
- * 2026-11-04).  Stride = 720 * 3 = 2160, RGB888 packed, p[0]=R.
+ * GEOMETRY (measured, with a panel photo of banner attempt 2): the logo
+ * buffer at lcd_base is 1600x720 LANDSCAPE, stride 4800 - the cmdline's
+ * lcd_size=1600x720 IS the buffer layout - but the panel is 720x1600
+ * portrait and displays the buffer ROTATED 90 degrees: buffer x shows up
+ * as panel y (downward) and buffer y as panel x (rightward).  Text
+ * painted in buffer orientation therefore runs VERTICALLY up the panel
+ * edge (attempt 1), and a 2160-byte stride shears it (attempt 2).  To
+ * place a shape at panel (X, Y), paint buffer (y = X, x = Y).  RGB888
+ * packed; per-channel byte order unconfirmed - keep indicator colors
+ * byte-symmetric (gray/white/black).
  * Row 0 is a permanent milestone line; rows 1..3 hold EL/KVM, CPU ID, and
  * the single current setup/initcall status.  printk mirroring is deliberately
  * disabled: vprintk_emit() may be entered concurrently by several CPUs, and
  * drawing there races the shared cursor and overwrites text.
  */
-#if DIAG_SCREEN || DIAG_BANNER
-#include <linux/diag_font.h>
-#include <generated/utsrelease.h>
-
 #define DIAG_FB_PHYS	0x9e000000UL
-#define DIAG_FB_STRIDE	2160UL	/* 720 * 3 bytes (logo_bpix=24, native PORTRAIT) */
-#define DIAG_FB_ROWS	1600U
+#define DIAG_FB_STRIDE	4800UL	/* 1600 * 3 bytes; the cmdline lcd_size IS the buffer layout */
+#define DIAG_FB_ROWS	720U
+
+#if DIAG_SCREEN
+#include <linux/diag_font.h>
 #define DIAG_GLYPH_W	8U
 #define DIAG_GLYPH_H	16U
 #define DIAG_SX		2U	/* 16 px wide glyphs */
@@ -144,10 +145,6 @@ static inline void diag_screen_draw(unsigned int row, const char *text,
 	}
 	__flush_dcache_area(r, DIAG_CH * DIAG_FB_STRIDE);
 }
-
-#endif /* DIAG_SCREEN || DIAG_BANNER: shared paint primitives */
-
-#if DIAG_SCREEN
 
 static inline void diag_screen_clear(void)
 {
@@ -335,87 +332,58 @@ static inline void diag_screen_init(void) { }
 #define DIAG_SCREEN_INIT diag_screen_init()
 
 /*
- * Production boot banner (DIAG_BANNER): the only on-panel output of a
- * normal boot, replacing the old full-width white diag bands.  One teal
- * accent line and one centered dark text chip are painted ONCE, right
- * after paging_init() (where this runs the linear map exists, exactly
- * like the diag console it shares its primitives with).  The bootloader
- * logo stays visible until Android's boot animation replaces the frame
- * a few seconds later.
+ * Production boot indicator (DIAG_BANNER): a PROGRESS BAR along the
+ * panel's top edge, replacing the white diag bands and both text banner
+ * attempts.  Under the transposed scanout the panel top edge is buffer
+ * rows 0..1 and the bar runs along buffer x - 12 segments x 132 px,
+ * filled as boot progresses:
  *
- * The message is a compile-time constant (UTS_RELEASE comes from the
- * generated utsrelease.h): no printf machinery runs this early, and the
- * glyph renderer paints its own dark cell background, so the chip is
- * readable on any logo.
+ *   head.S  segments 0,1,2  pre-MMU milestones (brightening per stage)
+ *   setup.c segments 3..7   right after paging_init()
+ *   main.c  segments 8..11  after do_basic_setup() (all initcalls done)
+ *
+ * Rectangles only: no glyphs, no fonts, nothing that can shear.  A hang
+ * names the last filled segment on a photo.  Colors are byte-symmetric
+ * gray (the per-channel byte order of the scanout is unconfirmed).
  */
 #if DIAG_BANNER
-/*
- * Colors are deliberately byte-order-safe (white / black / gray): the
- * RGB-vs-BGR byte order of the logo scanout is not confirmed, so no
- * colored accents until someone photographs a known-color test.
- */
-#define DIAG_BANNER_ACCENT_RGB	0x707070U
-#define DIAG_BANNER_ROW		16U	/* panel px row of the first text line */
+#define DIAG_BAR_X0	8U		/* first bar px (buffer x = panel y) */
+#define DIAG_BAR_SEG	132U		/* px per segment */
+#define DIAG_BAR_SEGS	12U
+#define DIAG_BAR_SHADE	0x8aU
+#define DIAG_BAR_SHADE_FULL 0xb0U
 
-static inline void diag_banner_fill(unsigned int y, unsigned int x0,
-				    unsigned int width, unsigned int h,
-				    u32 rgb)
+static inline void diag_bar_fill(unsigned int x0, unsigned int x1, u8 shade)
 {
-	u8 *p = (u8 *)phys_to_virt(DIAG_FB_PHYS +
-			(unsigned long)y * DIAG_FB_STRIDE);
-	unsigned int i, x;
+	u8 *p = (u8 *)phys_to_virt(DIAG_FB_PHYS);
+	unsigned int row, x;
 
-	for (i = 0; i < h; i++) {
-		u8 *row = p + (unsigned long)i * DIAG_FB_STRIDE;
+	for (row = 0; row < 2; row++) {
+		u8 *line = p + (unsigned long)row * DIAG_FB_STRIDE;
 
-		for (x = 0; x < width; x++)
-			diag_scr_pixel(row +
-				(unsigned long)(x0 + x) * 3UL, rgb);
+		for (x = x0; x < x1; x++) {
+			line[x * 3UL] = shade;
+			line[x * 3UL + 1UL] = shade;
+			line[x * 3UL + 2UL] = shade;
+		}
 	}
-	__flush_dcache_area(p, (unsigned long)h * DIAG_FB_STRIDE);
+	__flush_dcache_area(p, 2UL * DIAG_FB_STRIDE);
 }
 
-static inline void diag_banner_text(unsigned int y, unsigned int x0,
-				    const char *s, unsigned int len)
+/* fill segments [seg0, seg1) of the boot progress bar */
+static inline void diag_bootbar(unsigned int seg0, unsigned int seg1,
+				u8 shade)
 {
-	u8 *p = (u8 *)phys_to_virt(DIAG_FB_PHYS +
-			(unsigned long)y * DIAG_FB_STRIDE);
-	unsigned int i;
-
-	for (i = 0; i < len; i++)
-		diag_scr_glyph(p +
-			(unsigned long)(x0 + i * DIAG_CW) * 3UL,
-			(unsigned char)s[i]);
-	__flush_dcache_area(p, (unsigned long)DIAG_CH * DIAG_FB_STRIDE);
+	if (seg0 >= DIAG_BAR_SEGS || seg1 > DIAG_BAR_SEGS || seg0 >= seg1)
+		return;
+	diag_bar_fill(DIAG_BAR_X0 + seg0 * DIAG_BAR_SEG,
+		      DIAG_BAR_X0 + seg1 * DIAG_BAR_SEG, shade);
 }
-
-static inline void diag_boot_banner(void)
-{
-	static const char line1[] = "moto-e32 custom kernel";
-	static const char line2[] = UTS_RELEASE " kvmcompat - booting";
-	const unsigned int w1 = (sizeof(line1) - 1) * DIAG_CW;
-	const unsigned int w2 = (sizeof(line2) - 1) * DIAG_CW;
-	const unsigned int w = (w1 > w2) ? w1 : w2;
-	const unsigned int screen_w = DIAG_FB_STRIDE / 3U;
-	const unsigned int x0 = (screen_w - w) / 2U;
-
-	if (w >= screen_w)
-		return;	/* cannot happen: the messages are compile-time */
-
-	/* one dark chip under both lines + a gray accent line on top */
-	diag_banner_fill(DIAG_BANNER_ROW, x0, w, 2 * DIAG_CH, DIAG_BG);
-	diag_banner_fill(DIAG_BANNER_ROW - 2, x0, w, 2,
-			 DIAG_BANNER_ACCENT_RGB);
-
-	/* the two lines, centered inside the chip */
-	diag_banner_text(DIAG_BANNER_ROW, x0 + (w - w1) / 2U,
-			 line1, sizeof(line1) - 1);
-	diag_banner_text(DIAG_BANNER_ROW + DIAG_CH, x0 + (w - w2) / 2U,
-			 line2, sizeof(line2) - 1);
-}
-#define DIAG_BANNER_INIT diag_boot_banner()
+#define DIAG_BANNER_INIT diag_bootbar(3, 8, DIAG_BAR_SHADE)
+#define DIAG_BOOTBAR_FULL diag_bootbar(8, 12, DIAG_BAR_SHADE_FULL)
 #else
 #define DIAG_BANNER_INIT do { } while (0)
+#define DIAG_BOOTBAR_FULL do { } while (0)
 #endif
 
 /*

@@ -118,29 +118,30 @@ pe_header:
 	 */
 
 /*
- * DIAG: early-boot progress dashes.  A short (320 px, one panel row) dim
- * dash, at the top-left of the PORTRAIT 720x1600 logo buffer (stride
- * 2160 = 720 * 3, RGB888; see include/linux/diag_stage.h).
- * dash is stored through a *physical* address at each pre-MMU milestone of
- * stext, one panel row below the previous and one shade brighter, so a
- * photo of a hung boot still names the last completed step.  Only valid
- * while the MMU is off, which is exactly where these probes sit.  Clobbers
- * x9/x10/x11, which the boot path does not use before start_kernel().
- *
- * The original diag build painted full-width 128 KB solid-white bands here
- * (commit c096f1b790c1); in production they showed up as a plain white bar
- * across the boot logo, so they were replaced by these dashes.  The on-panel
- * text banner that follows later is drawn from C at setup_arch() time
- * (include/linux/diag_stage.h, DIAG_BANNER).
+ * DIAG: boot progress bar, pre-MMU segments.  The panel displays the
+ * logo buffer ROTATED 90 degrees (buffer x = panel y down, buffer y =
+ * panel x right; see include/linux/diag_stage.h), so the on-panel top
+ * edge is buffer rows 0..1 and the bar runs along buffer x.  Each
+ * pre-MMU milestone fills one more 132 px segment (two 396-byte runs,
+ * one per buffer row), one shade brighter - a photo of a hung boot
+ * names the last completed step.  The stores are physical and only
+ * valid while the MMU is off, which is exactly where these probes sit;
+ * they clobber x9/x10/x11, which the boot path does not use before
+ * start_kernel().  Segments 3..7 (paging done) and 8..11 (all
+ * initcalls done) are filled from C: include/linux/diag_stage.h,
+ * DIAG_BANNER.  The full-width 128 KB white bands of the diag build
+ * (commit c096f1b790c1) are gone; the two text banner attempts
+ * (ef9fac793281, ecdf289b7473) never rendered cleanly under the
+ * rotated scanout and were dropped.
  */
-	.macro	diag_probe, yrow, shade
-	movz	x10, #(((0x9e000000 + (\yrow) * 2160) >> 16) & 0xffff), lsl #16
-	movk	x10, #((0x9e000000 + (\yrow) * 2160) & 0xffff)
+	.macro	diag_bar, off, len, shade
+	movz	x10, #(((0x9e000000 + (\off)) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\off)) & 0xffff)
 	movz	x9,  #((\shade) * 0x0101)
 	movk	x9,  #((\shade) * 0x0101), lsl #16
 	movk	x9,  #((\shade) * 0x0101), lsl #32
 	movk	x9,  #((\shade) * 0x0101), lsl #48
-	movz	x11, #60
+	movz	x11, #(((\len) + 15) / 16)
 9991:	stp	x9, x9, [x10], #16
 	subs	x11, x11, #1
 	b.ne	9991b
@@ -149,12 +150,14 @@ pe_header:
 ENTRY(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
-	diag_probe 2, 0x2a
+	diag_bar 24, 396, 0x2a
+	diag_bar 4824, 396, 0x2a
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
 	bl	__create_page_tables
-	diag_probe 3, 0x4a
+	diag_bar 420, 396, 0x4a
+	diag_bar 5220, 396, 0x4a
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
 	 * details.
@@ -162,7 +165,8 @@ ENTRY(stext)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
-	diag_probe 4, 0x6a
+	diag_bar 816, 396, 0x6a
+	diag_bar 5616, 396, 0x6a
 	b	__primary_switch
 ENDPROC(stext)
 
