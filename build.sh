@@ -35,4 +35,24 @@ $M -s kernelrelease LOCALVERSION="+-ab612c2"
 echo "--- building"
 $M -j2 Image modules LOCALVERSION="+-ab612c2"
 ls -la "$OUT/arch/arm64/boot/Image" "$OUT/Module.symvers"
+
+
+# --- stable output copy (survives reboots; /tmp is RAM-backed) ---
+# The Image alone cannot boot the phone to the UI: SurfaceFlinger needs the
+# mali_kbase module and WiFi needs sprdwl_ng, staged on the device as Magisk
+# modules (docs/18 sec. 6).  Image and .ko MUST come from the same build
+# (same vermagic + module_layout CRC), so they are copied together, with a
+# manifest that binds them.
+STABLE=~/kernel-out
+rm -rf "$STABLE"
+mkdir -p "$STABLE"
+cp "$OUT/arch/arm64/boot/Image" "$STABLE/Image"
+cp "$OUT/drivers/gpu/arm/midgard/mali_kbase.ko" "$STABLE/mali_kbase.ko"
+cp "$OUT/drivers/net/wireless/sprd_wlan/sprdwl_ng.ko" "$STABLE/sprdwl_ng.ko"
+cp "$OUT/drivers/misc/sprdbt_tty/sprdbt_tty.ko" "$STABLE/sprdbt_tty.ko" || true
+cp "$OUT/Module.symvers" "$STABLE/Module.symvers"
+cp "$OUT/.config" "$STABLE/kernel.config"
+sha256sum "$STABLE"/* | sed "s|$STABLE/||" > "$STABLE/SHA256SUMS"
+cat "$STABLE/SHA256SUMS"
+echo "--- stable output in $STABLE (Image + modules, one build)"
 echo DONE
