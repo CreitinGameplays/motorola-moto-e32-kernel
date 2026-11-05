@@ -9,6 +9,7 @@
 
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/diag_stage.h>
 #include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/tty.h>
@@ -239,11 +240,13 @@ static int gs_bind(struct usb_composite_dev *cdev)
 	usb_composite_overwrite_options(cdev, &coverwrite);
 	INFO(cdev, "%s\n", GS_VERSION_NAME);
 
+	diag_status(5, 1);
 	return 0;
 fail1:
 	kfree(otg_desc[0]);
 	otg_desc[0] = NULL;
 fail:
+	diag_status(5, 0);
 	return status;
 }
 

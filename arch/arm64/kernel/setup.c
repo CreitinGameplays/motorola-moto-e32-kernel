@@ -16,6 +16,7 @@
 #include <linux/console.h>
 #include <linux/cache.h>
 #include <linux/screen_info.h>
+#include <linux/diag_stage.h>
 #include <linux/init.h>
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
@@ -54,6 +55,30 @@
 #include <asm/efi.h>
 #include <asm/xen/hypervisor.h>
 #include <asm/mmu_context.h>
+
+
+/*
+ * Panel log console: the diag text engine as a printk console driver.
+ * Registered at the end of setup_arch() with CON_PRINTBUFFER, which
+ * replays the whole log buffer through the painter first, then carries
+ * every later printk live.  Not CON_BOOT, so nothing ever unregisters
+ * it: the panel log stays for the whole boot (and the freeze).
+ */
+struct diag_txt_state diag_txt_state;
+struct diag_klog diag_klog;
+
+static void diag_console_write(struct console *con, const char *s,
+			       unsigned int n)
+{
+	diag_txt_puts(s, n);
+}
+
+static struct console diag_console = {
+	.name	= "diagfb",
+	.write	= diag_console_write,
+	.flags	= CON_PRINTBUFFER | CON_ENABLED | CON_ANYTIME,
+	.index	= -1,
+};
 
 static int num_standard_resources;
 static struct resource *standard_resources;
@@ -331,21 +356,38 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	arm64_memblock_init();
 
+	/* The vendor DT only reserves the first 0xab00 bytes of the logo
+	 * buffer the bootloader leaves scanning out (720x1600 RGB888,
+	 * stride 2160), so the page allocator hands the rest to the kernel
+	 * and overwrites the on-panel boot bar mid-boot. Keep the whole
+	 * scanout area out of the allocator (but leave it mapped - the
+	 * bar paints through the linear map). See include/linux/diag_stage.h.
+	 */
+	/* 8 MiB: the a8r8g8b8 frame is 720*1600*4 = 4.6 MiB; the old 4 MiB
+	 * reserve left the bottom rows to the page allocator (artifacts) */
+	memblock_reserve(DIAG_FB_PHYS, 8UL << 20);
+
 	paging_init();
+	DIAG_BANNER_INIT;
 
 	acpi_table_upgrade();
 
 	/* Parse the ACPI tables for possible boot-time configuration */
 	acpi_boot_table_init();
+	diag_milestone(0);
 
 	if (acpi_disabled)
 		unflatten_device_tree();
 
+	diag_milestone(1);
 	bootmem_init();
+	diag_milestone(2);
 
 	kasan_init();
+	diag_milestone(3);
 
 	request_standard_resources();
+	diag_milestone(4);
 
 	early_ioremap_reset();
 
@@ -359,6 +401,25 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	init_bootcpu_ops();
 	smp_init_cpus();
 	smp_build_mpidr_hash();
+
+	/* the panel log console: CON_PRINTBUFFER replays everything
+	 * printed so far, then every printk lands on the panel */
+	diag_txt_init();
+	register_console(&diag_console);
+	/* force the CON_PRINTBUFFER backlog through NOW: the 7.1
+	 * printk defers legacy output to the kthread that starts at
+	 * the early initcall level - tests 28/29 died before that
+	 * and the panel stayed empty.  Uncontended here (same as
+	 * console_init's own console_lock use pre-scheduler). */
+	console_lock();
+	console_unlock();
+
+	/* the printk-independent log painter: rewind to the oldest record
+	 * and paint the whole backlog now - no console machinery needed */
+	kmsg_dump_rewind(&diag_klog.iter);
+	diag_klog.ready = true;
+	diag_paint_newlog();
+
 
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	/*

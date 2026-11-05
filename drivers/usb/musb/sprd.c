@@ -9,6 +9,8 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/slab.h>
+#include <linux/diag_stage.h>
 #include <linux/platform_device.h>
 #include <linux/usb/role.h>
 #include "musb_core.h"
@@ -274,14 +276,18 @@ static int sprd_musb_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	ret = of_platform_populate(np, NULL, NULL, dev);
-	if (ret)
+	if (ret) {
+		diag_status(3, 0);
 		return dev_err_probe(dev, ret,
 				"failed to create child devices at %p\n", np);
+	}
 
 	glue->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(glue->clk))
+	if (IS_ERR(glue->clk)) {
+		diag_status(3, 0);
 		return dev_err_probe(dev, PTR_ERR(glue->clk),
 				"failed to get clock\n");
+	}
 
 	pdata->config = &sprd_musb_hdrc_config;
 	pdata->platform_ops = &sprd_musb_ops;
@@ -296,6 +302,7 @@ static int sprd_musb_probe(struct platform_device *pdev)
 
 	glue->phy = devm_of_phy_get_by_index(dev, dev->of_node, 0);
 	if (IS_ERR(glue->phy)) {
+		diag_status(3, 0);
 		return dev_err_probe(dev, PTR_ERR(glue->phy),
 			"failed to get phy\n");
 	}
@@ -303,8 +310,10 @@ static int sprd_musb_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, glue);
 
 	ret = clk_prepare_enable(glue->clk);
-	if (ret)
+	if (ret) {
+		diag_status(3, 0);
 		return ret;
+	}
 
 	pinfo = sprd_dev_info;
 	pinfo.parent = dev;
@@ -318,10 +327,12 @@ static int sprd_musb_probe(struct platform_device *pdev)
 	glue->musb_pdev = platform_device_register_full(&pinfo);
 	if (IS_ERR(glue->musb_pdev)) {
 		ret = PTR_ERR(glue->musb_pdev);
+		diag_status(3, 0);
 		dev_err(dev, "failed to register musb device: %d\n", ret);
 		goto err_device_register;
 	}
 
+	diag_status(3, 1);
 	return 0;
 
 err_device_register:
@@ -340,8 +351,42 @@ static void sprd_musb_remove(struct platform_device *pdev)
 #ifdef CONFIG_OF
 static const struct of_device_id sprd_musb_match[] = {
 	{ .compatible = "sprd,musb" },
+	{ .compatible = "sprd,qogirl6-musb" },	/* vendor DTB on the Moto E32 */
 	{ }
 };
+
+/*
+ * Bring-up shim for the vendor DTB: its usb@64900000 node carries the
+ * pre-standard "usb-phy" phandle instead of "phys" (same provider,
+ * #phy-cells = 0). Copy the phandle over before any device probing so
+ * devm_of_phy_get_by_index() in the probe path finds it.
+ */
+static int __init sprd_musb_dt_shim(void)
+{
+	struct device_node *np;
+
+	for_each_compatible_node(np, NULL, "sprd,qogirl6-musb") {
+		struct property *prop;
+		u32 ph;
+
+		if (of_property_present(np, "phys"))
+			continue;
+		if (of_property_read_u32(np, "usb-phy", &ph))
+			continue;
+		prop = kzalloc(sizeof(*prop), GFP_KERNEL);
+		if (!prop)
+			continue;
+		prop->name = "phys";
+		prop->length = sizeof(ph);
+		prop->value = kmemdup(&ph, sizeof(ph), GFP_KERNEL);
+		if (!prop->value || of_add_property(np, prop)) {
+			kfree(prop->value);
+			kfree(prop);
+		}
+	}
+	return 0;
+}
+early_initcall(sprd_musb_dt_shim);
 MODULE_DEVICE_TABLE(of, sprd_musb_match);
 #endif
 

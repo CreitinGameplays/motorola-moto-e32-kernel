@@ -82,9 +82,49 @@
 	 *  x20        primary_entry() .. __primary_switch()    CPU boot mode
 	 *  x21        primary_entry() .. start_kernel()        FDT pointer passed at boot in x0
 	 */
-SYM_CODE_START(primary_entry)
-	bl	record_mmu_state
+/*
+ * DIAG: on-panel boot bar, pre-MMU part (portrait 720x1600, a8r8g8b8,
+ * bar rows 24..39, segments of 48 px - see include/linux/diag_stage.h).
+ * The vendor bootloader enters with the MMU off, so these physical
+ * stores hit the logo buffer directly.  Clobbers x9..x13.
+ */
+	.macro	diag_bar, row0, rows, x0, npix, shade
+	movz	x10, #(((0x9e000000 + (\row0) * 2880 + (\x0) * 4) >> 16) & 0xffff), lsl #16
+	movk	x10, #((0x9e000000 + (\row0) * 2880 + (\x0) * 4) & 0xffff)
+	movz	x9,  #((0xff000000 + (\shade) * 0x010101) & 0xffff)
+	movk	x9,  #(((0xff000000 + (\shade) * 0x010101) >> 16) & 0xffff), lsl #16
+	movk	x9,  #(((0xff000000 + (\shade) * 0x010101) >> 32) & 0xffff), lsl #32
+	movk	x9,  #(((0xff000000 + (\shade) * 0x010101) >> 48) & 0xffff), lsl #48
+	movz	x11, #(\rows)
+9992:	movz	x12, #((\npix) * 4 / 16)
+	mov	x13, x10
+9991:	stp	x9, x9, [x13], #16
+	subs	x12, x12, #1
+	b.ne	9991b
+	add	x10, x10, #2880
+	subs	x11, x11, #1
+	b.ne	9992b
+	.endm
+
+SYM_CODE_START(primary_entry)	bl	record_mmu_state
 	bl	preserve_boot_args
+#ifdef CONFIG_HAWAII_KEXEC_TEST
+	/*
+	 * HAWAII-TEST-9: PSCI SYSTEM_RESET (0x84000009) as the first act
+	 * of the new kernel.  Proves (a) kexec reached 7.1 code at all,
+	 * (b) the firmware gives us a driver-less warm reset, and
+	 * (c) the board returns to slot _b / Android by itself.  If the
+	 * SMC returns (NOT_SUPPORTED) boot continues unchanged.
+	 */
+	mov	x0, #0x9
+	mov	x1, xzr
+	mov	x2, xzr
+	mov	x3, xzr
+	movk	x0, #0x8400, lsl #16
+	smc	#0
+#endif
+	diag_bar 24, 16, 72, 576, 0x28		// track
+	diag_bar 24, 16, 72, 48, 0x60		// segment 0: args preserved
 
 	adrp	x1, early_init_stack
 	mov	sp, x1
@@ -119,6 +159,7 @@ SYM_CODE_START(primary_entry)
 1:	mov	x0, x19
 	bl	init_kernel_el			// w0=cpu_boot_mode
 	mov	x20, x0
+	diag_bar 24, 16, 120, 48, 0x90		// segment 1: EL setup done
 
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
@@ -127,6 +168,7 @@ SYM_CODE_START(primary_entry)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
+	diag_bar 24, 16, 168, 48, 0xb8		// segment 2: CPU ready for MMU
 	b	__primary_switch
 SYM_CODE_END(primary_entry)
 

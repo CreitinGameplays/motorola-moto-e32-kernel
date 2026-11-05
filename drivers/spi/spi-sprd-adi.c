@@ -378,6 +378,36 @@ static int sprd_adi_restart(struct sprd_adi *sadi, unsigned long mode,
 	return NOTIFY_DONE;
 }
 
+static int sprd_adi_restart_sharkl5(struct sys_off_data *data)
+{
+	struct sprd_adi *sadi = data->cb_data;
+	u32 val;
+
+	/*
+	 * UMS9230/qogirl6 with the SC2730 PMIC: the vendor kernel's
+	 * sprd_adi_restart_handler() sequence.  Record a normal reboot mode
+	 * in the PMIC reset-status register so the bootloader takes the
+	 * normal boot path after the reset, then enable and trigger the PMIC
+	 * soft reset.
+	 */
+	sprd_adi_read(sadi, 0x1bac, &val);   /* RST_STATUS */
+	val &= ~0xf0;                        /* ~HWRST_STATUS_WATCHDOG */
+	val |= 0x40;                         /* HWRST_STATUS_NORMAL */
+	sprd_adi_write(sadi, 0x1bac, val);
+
+	sprd_adi_read(sadi, 0x1bf8, &val);   /* SWRST_CTRL0 */
+	val |= BIT(4);                        /* REG_RST_EN */
+	sprd_adi_write(sadi, 0x1bf8, val);
+
+	sprd_adi_read(sadi, 0x1824, &val);   /* SOFT_RST_HW */
+	val |= BIT(0);                        /* REG_SOFT_RST */
+	sprd_adi_write(sadi, 0x1824, val);
+
+	mdelay(1000);
+	dev_emerg(sadi->dev, "Unable to restart system\n");
+	return NOTIFY_DONE;
+}
+
 static int sprd_adi_restart_sc9860(struct sys_off_data *data)
 {
 	struct sprd_adi_wdg wdg = {
@@ -536,6 +566,20 @@ static struct sprd_adi_data ums512_data = {
 	.read_check = sprd_adi_read_check_r3,
 };
 
+/* UMS9230 ("qogirl6"): same 15-bit ADI as ums512, SC2730 PMIC reset
+ * (the vendor DTB's compatible pair is "sprd,qogirl6-adi" +
+ * "sprd,sharkl5-adi"; the vendor kernel binds sharkl5_data). */
+static struct sprd_adi_data sharkl5_data = {
+	.slave_offset = ADI_15BIT_SLAVE_OFFSET,
+	.slave_addr_size = ADI_15BIT_SLAVE_ADDR_SIZE,
+	.read_check = sprd_adi_read_check_r3,
+	/* NO restart handler: the SC2730 sequence powers this phone OFF
+	 * instead of resetting it (test 32: logsave rebooted -> phone
+	 * died) - the vendor qogirl6_data also registers none
+	 * (pmic_wdt_support=false).  The PSCI SYSTEM_RESET from the
+	 * merged dtbo takes over instead. */
+};
+
 static const struct of_device_id sprd_adi_of_match[] = {
 	{
 		.compatible = "sprd,sc9860-adi",
@@ -548,6 +592,14 @@ static const struct of_device_id sprd_adi_of_match[] = {
 	{
 		.compatible = "sprd,ums512-adi",
 		.data = &ums512_data,
+	},
+	{
+		.compatible = "sprd,qogirl6-adi",
+		.data = &sharkl5_data,
+	},
+	{
+		.compatible = "sprd,sharkl5-adi",
+		.data = &sharkl5_data,
 	},
 	{ },
 };

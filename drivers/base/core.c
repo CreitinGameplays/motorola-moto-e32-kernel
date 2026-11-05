@@ -1652,7 +1652,16 @@ static void device_links_purge(struct device *dev)
 #define FW_DEVLINK_FLAGS_RPM		(FW_DEVLINK_FLAGS_ON | \
 					 DL_FLAG_PM_RUNTIME)
 
-static u32 fw_devlink_flags = FW_DEVLINK_FLAGS_RPM;
+/*
+ * hawaii bring-up: the vendor DTB references Unisoc QoS nodes
+ * (/soc/mm/qos03 etc.) that no mainline driver binds, and the LK
+ * strips the fw_devlink= boot parameter, so the enforced default made
+ * real devices wait forever on phantom suppliers (the UFS host sat in
+ * deferred probe: "platform 20200000.ufs: wait for supplier
+ * /soc/mm/qos03").  Permissive keeps the dependency logging but does
+ * not block probing.
+ */
+static u32 fw_devlink_flags = FW_DEVLINK_FLAGS_PERMISSIVE;
 static int __init fw_devlink_setup(char *arg)
 {
 	if (!arg)

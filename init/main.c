@@ -13,12 +13,25 @@
 #define DEBUG		/* Enable initcall_debug */
 
 #include <linux/types.h>
+#include <linux/diag_stage.h>
 #include <linux/export.h>
 #include <linux/extable.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/binfmts.h>
 #include <linux/kernel.h>
+#include <linux/reboot.h>
+#include <linux/timer.h>
+#include <linux/clk.h>
+#include <linux/delay.h>
+#include <linux/panic_notifier.h>
+#include <linux/io.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/clk.h>
+#include <linux/delay.h>
+#include <linux/io.h>
+#include <linux/of.h>
 #include <linux/syscalls.h>
 #include <linux/stackprotector.h>
 #include <linux/string.h>
@@ -1013,6 +1026,9 @@ static void __init print_kernel_cmdline(const char *cmdline)
 		pr_notice("%s%s\n", KERNEL_CMDLINE_PREFIX, cmdline);
 }
 
+/* HAWAII: early boot-progress arm (definition near the bottom) */
+static void hawaii_boot_progress(const char *where);
+
 asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
 void start_kernel(void)
 {
@@ -1037,6 +1053,7 @@ void start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	diag_milestone(5);
 	mm_core_init_early();
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
@@ -1046,6 +1063,7 @@ void start_kernel(void)
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
+	diag_milestone(6);
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 	early_numa_node_init();
 	boot_cpu_hotplug_init();
@@ -1074,8 +1092,10 @@ void start_kernel(void)
 	 */
 	setup_log_buf(0);
 	vfs_caches_init_early();
+	diag_milestone(7);
 	sort_main_extable();
 	trap_init();
+	diag_milestone(8);
 	mm_core_init();
 	maple_tree_init();
 	poking_init();
@@ -1090,6 +1110,7 @@ void start_kernel(void)
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
 	sched_init();
+	diag_milestone(9);
 
 	if (WARN(!irqs_disabled(),
 		 "Interrupts were enabled *very* early, fixing it\n"))
@@ -1108,8 +1129,10 @@ void start_kernel(void)
 	 * workqueue_init().
 	 */
 	workqueue_init_early();
+	diag_milestone(10);
 
 	rcu_init();
+	diag_milestone(11);
 	kvfree_rcu_init();
 
 	/* Trace events are available after this */
@@ -1122,15 +1145,22 @@ void start_kernel(void)
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
 	init_IRQ();
+	diag_milestone(12);
 	tick_init();
+	diag_milestone(13);
 	rcu_init_nohz();
 	timers_init();
 	srcu_init();
 	hrtimers_init();
+	diag_milestone(14);
 	softirq_init();
 	vdso_setup_data_pages();
 	timekeeping_init();
 	time_init();
+
+	diag_milestone(15);
+
+	hawaii_boot_progress("early");
 
 	/* This must be after timekeeping is initialized */
 	random_init();
@@ -1155,6 +1185,7 @@ void start_kernel(void)
 	 * this. But we do want output early, in case something goes wrong.
 	 */
 	console_init();
+	diag_milestone(16);
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
@@ -1468,6 +1499,7 @@ static void __init do_initcalls(void)
 		/* Parser modifies command_line, restore it each time */
 		strcpy(command_line, saved_command_line);
 		do_initcall_level(level, command_line);
+		diag_milestone(17 + level);
 	}
 
 	kfree(command_line);
@@ -1581,6 +1613,9 @@ void __weak free_initmem(void)
 	free_initmem_default(POISON_FREE_INITMEM);
 }
 
+/* HAWAII: forward declaration (defined near the bottom of this file) */
+static void hawaii_boot_progress(const char *where);
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1615,6 +1650,8 @@ static int __ref kernel_init(void *unused)
 
 	do_sysctl_args();
 
+	diag_status(0, 1);	/* init will exec now */
+	hawaii_boot_progress("init exec");
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -1671,8 +1708,309 @@ void __init console_on_rootfs(void)
 	fput(file);
 }
 
+/*
+ * HAWAII boot watchdog + heartbeat. Without USB, serial or vendor
+ * modules a 7.x test boot on this phone can only end in a silent
+ * userspace hang - and this firmware ignores PSCI SYSTEM_RESET (the
+ * test-3 timer fired, the board stayed hung). So reset the board the
+ * way the vendor kernel does: arm the AON FIQ watchdog directly
+ * ("sprd,wdt-r2p0-fiq" @0x644e0000; register sequence from the 4.14
+ * vendor driver drivers/watchdog/sprd_wdt_fiq.c, clocks resolve via
+ * the sprd ums9230 clock driver).
+ *
+ * hawaii.wdt=<sec>      (default 180, 0 = off) arms the hardware
+ *                       watchdog; the 1 Hz heartbeat feeds it, so the
+ *                       board resets ~180 s after the kernel dies hard.
+ * hawaii.selfreset=<sec> (default 150, 0 = off) stops feeding and arms
+ *                       a 3 s reset when userspace has made no visible
+ *                       progress: a hung init recovers by itself, the
+ *                       bootloader slot fallback boots the stock image,
+ *                       and ramoops survives the warm reset.
+ */
+static struct timer_list hawaii_hb_timer;
+static unsigned long hawaii_hb_ticks;
+/* absolute jiffies at which an unprogressing boot is reset */
+static unsigned long hawaii_deadline;
+static int hawaii_selfreset = 150;
+static int hawaii_wdt_timeout = 180;
+static void __iomem *hawaii_wdt_base;
+static void __iomem *hawaii_aon_base;	/* the AON APB syscon @0x64000000 */
+
+/*
+ * The AON watchdog's two aonapb_gate clocks are OFF in early boot: a
+ * write into a gated module is swallowed by the bus bridge, but the
+ * first READ aborts - synchronous external abort, delivered racing a
+ * nested SError (the test-28 panic at hawaii_wdt_arm+0xb4, the
+ * RTC-sync poll read of base+0x10).  The "bootloader leaves the wdt
+ * clock running" assumption came from the 4.14 arm_wdt module, which
+ * was loaded from Android with every clock up.  Turn both gates on
+ * before touching the WDT - and again on every heartbeat feed, because
+ * CONFIG_SPRD_UMS9230_CLK is built-in and clk_disable_unused()
+ * disables gates without consumers.  SC-gate protocol
+ * (drivers/clk/sprd/gate.c): the set register is reg + 0x1000.
+ */
+static void hawaii_wdt_clk_on(void)
+{
+	if (!hawaii_aon_base) {
+		hawaii_aon_base = ioremap(0x64000000UL, 0x3000);
+		if (!hawaii_aon_base)
+			return;
+	}
+	writel_relaxed(BIT(30), hawaii_aon_base + 0x8 + 0x1000);  /* apcpu-wdg-eb */
+	writel_relaxed(BIT(8), hawaii_aon_base + 0x18 + 0x1000);  /* ac-wdg-rtc-eb */
+}
+static void __iomem *hawaii_adi_base;	/* raw PMIC reset window */
+static bool hawaii_wdt_ready;
+
+#define HAWAII_WDT_LOCK		0x20
+#define HAWAII_WDT_UNLOCK	0xe551
+#define HAWAII_WDT_CTRL		0x8
+#define HAWAII_WDT_LOAD_L	0x0
+#define HAWAII_WDT_LOAD_H	0x4
+#define HAWAII_WDT_IRQ_L	0x2c
+#define HAWAII_WDT_IRQ_H	0x30
+#define HAWAII_WDT_RAW		0x10
+#define HAWAII_WDT_CNT_STEP	32768
+
+static void hawaii_wdt_load(unsigned int timeout_sec)
+{
+	u32 tmr = timeout_sec * HAWAII_WDT_CNT_STEP;
+	u32 delay = 0;
+
+	/* IRQ_LOAD stays 0 and INT_EN is never set, so a timeout is a plain
+	 * hardware reset - never an unhandled FIQ.  (The test-5 arm set
+	 * INT_EN and loaded IRQ_LOAD: the FIQ fired at timeout, the panic
+	 * path then tried the PSCI reset this firmware does not implement,
+	 * and the board just hung.  Same sequence as the 4.14
+	 * diag_arm_aon_wdt().)  No clock handling: the bootloader leaves
+	 * the wdt clock running, like the 4.14 diag code assumes. */
+	writel_relaxed(HAWAII_WDT_UNLOCK, hawaii_wdt_base + HAWAII_WDT_LOCK);
+	writel_relaxed((tmr >> 16) & 0xffff, hawaii_wdt_base + HAWAII_WDT_LOAD_H);
+	writel_relaxed(tmr & 0xffff, hawaii_wdt_base + HAWAII_WDT_LOAD_L);
+	writel_relaxed(0, hawaii_wdt_base + HAWAII_WDT_IRQ_H);
+	writel_relaxed(0, hawaii_wdt_base + HAWAII_WDT_IRQ_L);
+	writel_relaxed(0x0, hawaii_wdt_base + HAWAII_WDT_LOCK);
+
+	/* wait for the load to land (a few RTC cycles) */
+	while (delay++ < 1000 &&
+	       readl_relaxed(hawaii_wdt_base + HAWAII_WDT_RAW) & BIT(4))
+		cpu_relax();
+}
+
+static int hawaii_wdt_arm(unsigned int timeout_sec)
+{
+	u32 val;
+	hawaii_wdt_clk_on();
+
+
+	if (!hawaii_wdt_base) {
+		hawaii_wdt_base = ioremap(0x644e0000, 0x1000);
+		if (!hawaii_wdt_base)
+			return -ENOMEM;
+	}
+
+	hawaii_wdt_load(timeout_sec);
+
+	/* CTRL: NEW_VER_EN first, then CNT_EN | RST_EN - INT_EN stays clear.
+	 * Writes between unlock/lock, exactly like sprd_wdt_fiq_start(). */
+	writel_relaxed(HAWAII_WDT_UNLOCK, hawaii_wdt_base + HAWAII_WDT_LOCK);
+	val = readl_relaxed(hawaii_wdt_base + HAWAII_WDT_CTRL);
+	writel_relaxed(val | 0x4, hawaii_wdt_base + HAWAII_WDT_CTRL);
+	val = readl_relaxed(hawaii_wdt_base + HAWAII_WDT_CTRL);
+	writel_relaxed(val | 0xa, hawaii_wdt_base + HAWAII_WDT_CTRL);
+	writel_relaxed(0x0, hawaii_wdt_base + HAWAII_WDT_LOCK);
+	hawaii_wdt_ready = true;
+	return 0;
+}
+
+/*
+ * HAWAII raw ADI -> SC2730 PMIC soft reset - the third reset path for a
+ * hung boot.  do_kernel_restart() only works if the sprd-adi driver has
+ * probed, and emergency_restart() needs the PSCI SYSTEM_RESET this
+ * firmware does not implement.  This pokes the same PMIC register
+ * sequence as sprd_adi_restart_sharkl5() directly through the ADI
+ * controller at 0x64200000 (15-bit slave window at +0x20000; FIFO /
+ * RD_CMD / RD_DATA protocol from drivers/spi/spi-sprd-adi.c), so it
+ * works even when the hang happened before any driver probe.
+ */
+static void hawaii_pmic_raw_reset(void)
+{
+	void __iomem *adi = hawaii_adi_base;
+	u32 val, timeout;
+
+	if (!adi)
+		return;
+
+	/* RST_STATUS (0x1bac): record a normal reboot mode */
+	writel_relaxed(0x1bac, adi + 0x28);			/* REG_ADI_RD_CMD */
+	timeout = 2000000;
+	do {
+		val = readl_relaxed(adi + 0x2c);		/* REG_ADI_RD_DATA */
+		if (!(val & BIT(31)))			/* BIT_RD_CMD_BUSY */
+			break;
+		cpu_relax();
+	} while (--timeout);
+	if (timeout) {
+		val = (val & 0xffff & ~0xf0) | 0x40;	/* HWRST_STATUS_NORMAL */
+		while (readl_relaxed(adi + 0x30) & BIT(11))	/* FIFO full */
+			cpu_relax();
+		writel_relaxed(val, adi + 0x20000 + 0x1bac);
+	}
+
+	/* SWRST_CTRL0 (0x1bf8): enable the reset output */
+	writel_relaxed(0x1bf8, adi + 0x28);
+	timeout = 2000000;
+	do {
+		val = readl_relaxed(adi + 0x2c);
+		if (!(val & BIT(31)))
+			break;
+		cpu_relax();
+	} while (--timeout);
+	if (timeout) {
+		val = (val & 0xffff) | BIT(4);			/* REG_RST_EN */
+		while (readl_relaxed(adi + 0x30) & BIT(11))
+			cpu_relax();
+		writel_relaxed(val, adi + 0x20000 + 0x1bf8);
+	}
+
+	/* SOFT_RST_HW (0x1824): trigger the PMIC soft reset */
+	while (readl_relaxed(adi + 0x30) & BIT(11))
+		cpu_relax();
+	writel_relaxed(BIT(0), adi + 0x20000 + 0x1824);
+
+	mdelay(1000);	/* if we return, the reset did not fire */
+}
+
+/*
+ * Panic safety net: leave the panic text on the panel for
+ * hawaii_panic_delay seconds (photo/OCR window), then reset through
+ * the raw ADI -> SC2730 PMIC sequence - no driver, no cmdline, works
+ * from any panic context where hawaii_adi_base is mapped (m15 onward).
+ * Without this every pre-driver panic hung forever (the test-28
+ * Asynchronous SError panic) and needed a manual power-cycle + BROM
+ * drill.
+ */
+static unsigned int hawaii_panic_delay = 12;
+
+static int __init hawaii_panicdelay_setup(char *str)
+{
+	int v;
+
+	if (kstrtoint(str, 0, &v) == 0 && v >= 0)
+		hawaii_panic_delay = v;
+	return 1;
+}
+__setup("hawaii.panicdelay=", hawaii_panicdelay_setup);
+
+static int hawaii_panic_reset_nb(struct notifier_block *self,
+				 unsigned long ev, void *v)
+{
+	mdelay(hawaii_panic_delay * 1000U);
+	hawaii_pmic_raw_reset();
+	mdelay(1000);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block hawaii_panic_nb = {
+	.notifier_call = hawaii_panic_reset_nb,
+};
+
+static void hawaii_hb_fn(struct timer_list *t)
+{
+	static bool on;
+
+	diag_heartbeat(on = !on);		/* slot 7 blink */
+	diag_txt_hb(hawaii_hb_ticks);
+	diag_paint_newlog();
+	{
+		extern bool have_legacy_console;
+		extern bool printk_kthreads_ready;
+		char st[DIAG_TXT_COLS + 1];
+		int n = scnprintf(st, sizeof(st),
+				 "T+%lus c%u l%u k%u",
+				 (unsigned long)hawaii_hb_ticks,
+				 cpu_online(raw_smp_processor_id()) ? 1U : 0U,
+				 have_legacy_console ? 1U : 0U,
+				 printk_kthreads_ready ? 1U : 0U);
+
+		if (n > 0)
+			diag_txt_overlay(1, st, (unsigned int)n);
+	}
+	hawaii_wdt_clk_on();
+	if (hawaii_wdt_ready)			/* feed the hardware wdt */
+		hawaii_wdt_load(hawaii_wdt_timeout);
+	hawaii_hb_ticks++;
+
+	if (hawaii_selfreset && hawaii_deadline &&
+	    time_after(jiffies, hawaii_deadline)) {
+		pr_emerg("HAWAII-BOOTWDT: no boot progress for %lus, resetting\n",
+			 hawaii_hb_ticks);
+		hawaii_wdt_arm(3);		/* 3 s hardware reset */
+		/* reset path 1: the registered restart handlers (sprd-adi
+		 * SC2730 PMIC soft reset) - only if the driver probed */
+		do_kernel_restart(NULL);
+		emergency_restart();
+		/* reset path 2: raw ADI -> PMIC sequence, no probe needed */
+		hawaii_pmic_raw_reset();
+		/* nothing fired: do not re-enter every tick, or the spam
+		 * would flood the ramoops ring we want to read later */
+		hawaii_deadline = 0;
+		pr_emerg("HAWAII-BOOTWDT: all reset paths failed\n");
+	}
+	mod_timer(t, jiffies + HZ);
+}
+
+/*
+ * Arm the watchdog, or give the current boot phase a fresh window.  Called
+ * once at the start of kernel_init_freeable() (covers a hang inside any
+ * initcall) and again just before /init is exec'd (covers a userspace
+ * hang).  A healthy boot keeps bumping it, a dead one never does.
+ */
+static void hawaii_boot_progress(const char *where)
+{
+	hawaii_deadline = hawaii_selfreset ?
+		jiffies + hawaii_selfreset * HZ : 0;
+	hawaii_hb_ticks = 0;
+
+	if (!timer_pending(&hawaii_hb_timer)) {
+		timer_setup(&hawaii_hb_timer, hawaii_hb_fn, 0);
+		mod_timer(&hawaii_hb_timer, jiffies + HZ);
+		/* pre-map the ADI window for hawaii_pmic_raw_reset():
+		 * ioremap is not safe in the softirq context it fires in */
+		if (!hawaii_adi_base)
+			hawaii_adi_base = ioremap(0x64200000UL, 0x100000);
+		pr_info("HAWAII-BOOTWDT: selfreset=%ds, armed at %s\n",
+			hawaii_selfreset, where);
+	}
+}
+
+static int __init hawaii_selfreset_setup(char *str)
+{
+	int v;
+
+	if (kstrtoint(str, 0, &v) == 0 && v >= 0)
+		hawaii_selfreset = v;
+	return 1;
+}
+__setup("hawaii.selfreset=", hawaii_selfreset_setup);
+
+static int __init hawaii_wdt_setup(char *str)
+{
+	int v;
+
+	if (kstrtoint(str, 0, &v) == 0 && v >= 0)
+		hawaii_wdt_timeout = v;
+	return 1;
+}
+__setup("hawaii.wdt=", hawaii_wdt_setup);
+
 static noinline void __init kernel_init_freeable(void)
 {
+	if (hawaii_wdt_timeout > 0)
+		hawaii_wdt_arm(hawaii_wdt_timeout);
+	if (hawaii_wdt_timeout > 0 || hawaii_selfreset > 0)
+		hawaii_boot_progress("initcalls");
+
 	/* Now the scheduler is fully set up and can do blocking allocations */
 	gfp_allowed_mask = __GFP_BITS_MASK;
 
@@ -1701,6 +2039,7 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 
 	do_basic_setup();
+	DIAG_BOOTBAR_FULL;
 
 	kunit_run_all_tests();
 

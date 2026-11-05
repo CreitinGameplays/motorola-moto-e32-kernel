@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * Motorola Moto E32 (XT2227-1, "hawaii") - Unisoc UMS9230 / T606
+ *
+ * Milestone-1 board: CPU/PSCI/GIC/timers/UFS plus the framebuffer log
+ * buffer and ramoops, so the on-panel indicator and pstore work.
+ * Display (DPU/DSI + NT36525C panel), touch, PMIC (SC2730) regulators,
+ * cameras, audio and modem come later; the corresponding SoC nodes
+ * stay disabled by default.
+ */
+
+/dts-v1/;
+
+#include "ums9230.dtsi"
+
+/ {
+	model = "Motorola Moto E32 (XT2227-1)";
+	compatible = "motorola,hawaii", "sprd,ums9230-4h10", "sprd,ums9230";
+
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart1;
+	};
+
+	chosen {
+		/* the bootloader passes console=null and the UART is unwired;
+		 * the pstore ram console records everything */
+		stdout-path = "serial1:115200n8";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		/* measured on the device: 4 GiB with the namespace carve-out */
+		reg = <0x0 0x80000000 0x0 0x53f0000>,
+		      <0x0 0x85400000 0x0 0xfabff000>;
+	};
+
+	reserved-memory {
+		logobuffer@9e000000 {
+			reg = <0x0 0x9e000000 0x0 0xab0000>;
+			/* NOT no-map: diag_stage.h paints this through the
+			 * linear map (phys_to_virt) */
+		};
+
+		ramoops@fff80000 {
+			compatible = "ramoops";
+			reg = <0x0 0xfff80000 0x0 0x40000>;
+			console-size = <0x8000>;
+			record-size = <0x8000>;
+			pmsg-size = <0x8000>;
+		};
+	};
+};
+
+&uart0 { status = "okay"; };
+&uart1 { status = "okay"; };
+
+&ufs {
+	status = "okay";
+};
+
+/*
+ * USB: peripheral-only, so the kernel can bring up the musb gadget and
+ * expose ttyGS0 (CDC-ACM) as a console channel.  Fork issue #20: the Realme
+ * C35 needed exactly this - &hsphy and &usb status okay - and the mainline
+ * glue; the vendor DTB path never worked for us.
+ */
+&usb {
+	status = "okay";
+	dr_mode = "peripheral";
+};
+
+&hsphy {
+	status = "okay";
+};
+
+/*
+ * Reset: the SC2730 PMIC soft reset lives in the sprd-adi driver's
+ * qogirl6/sharkl5 variant (drivers/spi/spi-sprd-adi.c), which carries the
+ * vendor's register sequence (RST_STATUS=0x1bac, SWRST_CTRL0=0x1bf8,
+ * SOFT_RST_HW=0x1824).  The dtsi default ("sprd,ums9230-adi",
+ * "sprd,ums512-adi") binds ums512_data, which has no ->restart callback,
+ * and of_match_device() walks the *driver's* table in order, so
+ * "sprd,ums512-adi" has to go: otherwise it wins over qogirl6.
+ */
+&adi_bus {
+	compatible = "sprd,qogirl6-adi", "sprd,ums9230-adi";
+};

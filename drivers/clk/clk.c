@@ -1518,6 +1518,14 @@ __setup("clk_ignore_unused", clk_ignore_unused_setup);
 
 static int __init clk_disable_unused(void)
 {
+	/* hawaii bring-up: some AON clock gates live in bus domains that
+	 * are still powered down at this point - sprd_gate_is_enabled()
+	 * reads such a gate register and the read aborts (Asynchronous
+	 * SError, kernel panic at 1.9 s: tests 30/31).  Gating unused
+	 * clocks is a power optimization only; skip it entirely until the
+	 * dead domain is identified and brought up. */
+	return 0;
+
 	struct clk_core *core;
 	int ret;
 

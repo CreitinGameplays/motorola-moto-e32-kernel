@@ -6,6 +6,7 @@
  */
 
 #include <linux/mfd/syscon.h>
+#include <linux/diag_stage.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -87,6 +88,7 @@ static int sprd_hsphy_power_on(struct phy *phy)
 	regmap_clear_bits(hsphy->ana_regs, hsphy->data->pd_reg,
 			  BIT_ANLG_USB20_PS_PD_L | BIT_ANLG_USB20_PS_PD_S);
 
+	diag_status(2, 1);
 	return 0;
 }
 
@@ -182,23 +184,36 @@ static int sprd_hsphy_probe(struct platform_device *pdev)
 	hsphy->dev = &pdev->dev;
 
 	hsphy->data = of_device_get_match_data(hsphy->dev);
-	if (!hsphy->data)
+	if (!hsphy->data) {
+		diag_status(1, 0);
 		return -EINVAL;
+	}
 
 	hsphy->aon_apb = syscon_regmap_lookup_by_phandle(hsphy->dev->of_node,
 							 "sprd,syscon-aon-apb");
 	if (IS_ERR(hsphy->aon_apb))
+		/* vendor DTB names the same aon APB regmap node
+		 * "sprd,syscon-enable" (both point at syscon@64000000) */
+		hsphy->aon_apb = syscon_regmap_lookup_by_phandle(
+			hsphy->dev->of_node, "sprd,syscon-enable");
+	if (IS_ERR(hsphy->aon_apb)) {
+		diag_status(1, 0);
 		return dev_err_probe(hsphy->dev, PTR_ERR(hsphy->aon_apb),
 				     "failed to get AON APB syscon\n");
+	}
 
 	base = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
-	if (IS_ERR(base))
+	if (IS_ERR(base)) {
+		diag_status(1, 0);
 		return PTR_ERR(base);
+	}
 
 	hsphy->ana_regs = devm_regmap_init_mmio(hsphy->dev, base,
 						&sprd_hsphy_regmap_cfg);
-	if (IS_ERR(hsphy->ana_regs))
+	if (IS_ERR(hsphy->ana_regs)) {
+		diag_status(1, 0);
 		return PTR_ERR(hsphy->ana_regs);
+	}
 
 	phy = devm_phy_create(hsphy->dev, NULL, &sprd_hsphy_ops);
 	if (IS_ERR(phy))
@@ -209,10 +224,13 @@ static int sprd_hsphy_probe(struct platform_device *pdev)
 
 	provider = devm_of_phy_provider_register(hsphy->dev,
 						 of_phy_simple_xlate);
-	if (IS_ERR(provider))
+	if (IS_ERR(provider)) {
+		diag_status(1, 0);
 		return dev_err_probe(hsphy->dev, PTR_ERR(provider),
 				     "failed to register phy provider\n");
+	}
 
+	diag_status(1, 1);
 	return 0;
 }
 
@@ -233,6 +251,7 @@ static const struct sprd_hsphy_data ums9230_data = {
 
 static const struct of_device_id sprd_hsphy_of_match[] = {
 	{ .compatible = "sprd,ums9230-hsphy", .data = &ums9230_data },
+	{ .compatible = "sprd,qogirl6-phy", .data = &ums9230_data }, /* vendor DTB */
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sprd_hsphy_of_match);

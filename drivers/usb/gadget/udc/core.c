@@ -10,6 +10,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/diag_stage.h>
 #include <linux/device.h>
 #include <linux/list.h>
 #include <linux/idr.h>
@@ -1529,7 +1530,10 @@ EXPORT_SYMBOL_GPL(usb_get_gadget_udc_name);
  */
 int usb_add_gadget_udc(struct device *parent, struct usb_gadget *gadget)
 {
-	return usb_add_gadget_udc_release(parent, gadget, NULL);
+	int ret = usb_add_gadget_udc_release(parent, gadget, NULL);
+
+	diag_status(4, !ret);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(usb_add_gadget_udc);
 

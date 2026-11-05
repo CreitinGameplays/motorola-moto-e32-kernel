@@ -2478,3 +2478,12 @@ source "drivers/acpi/Kconfig"
 source "arch/arm64/kvm/Kconfig"
 
 source "kernel/livepatch/Kconfig"
+
+config HAWAII_KEXEC_TEST
+	bool "Hawaii: PSCI SYSTEM_RESET at kernel entry (kexec bring-up test)"
+	help
+	  For the Moto E32 (hawaii) 7.1 bring-up over kexec: issue the PSCI
+	  0.2 SYSTEM_RESET SMC (0x84000009) as the first action of the new
+	  kernel.  Proves the kexec handoff reached this kernel and that the
+	  firmware provides a warm reset with no driver/clock dependencies.
+	  Leave off for normal boots.

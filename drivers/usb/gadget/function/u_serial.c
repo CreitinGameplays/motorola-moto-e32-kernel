@@ -16,6 +16,7 @@
 
 #include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/diag_stage.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/tty.h>
@@ -1417,6 +1418,7 @@ int gserial_connect(struct gserial *gser, u8 port_num)
 	status = gs_console_connect(port);
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
+	diag_status(6, !status);
 	return status;
 
 fail_out:
