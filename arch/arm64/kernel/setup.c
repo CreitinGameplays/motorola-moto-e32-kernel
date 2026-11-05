@@ -41,6 +41,30 @@ void diag_stage_mirror(const char *text, size_t len)
 	diag_screen_puts(text, len);
 }
 #endif
+
+/*
+ * Panel log console: the diag text engine as a printk console driver.
+ * Registered at the end of setup_arch() with CON_PRINTBUFFER, which
+ * replays the whole log buffer through the painter first, then carries
+ * every later printk live.  Not CON_BOOT, so nothing ever unregisters
+ * it: the panel log stays for the whole boot.  (Named diag_fb_console:
+ * struct diag_console is already taken by the old DIAG_SCREEN state.)
+ */
+struct diag_txt_state diag_txt_state;
+
+static void diag_fbcon_write(struct console *con, const char *s,
+			     unsigned int n)
+{
+	diag_txt_puts(s, n);
+}
+
+static struct console diag_fb_console = {
+	.name	= "diagfb",
+	.write	= diag_fbcon_write,
+	.flags	= CON_PRINTBUFFER | CON_ENABLED,
+	.index	= -1,
+};
+
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
@@ -335,6 +359,11 @@ void __init setup_arch(char **cmdline_p)
 	smp_init_cpus();
 	DIAG_TRACE_HOOK(18, 0);
 	smp_build_mpidr_hash();
+
+	/* the panel log console: CON_PRINTBUFFER replays everything
+	 * printed so far, then every printk lands on the panel */
+	diag_txt_init();
+	register_console(&diag_fb_console);
 	DIAG_TRACE_HOOK(19, 0);
 
 	/* Init percpu seeds for random tags after cpus are set up. */

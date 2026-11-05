@@ -769,4 +769,150 @@ static inline void diag_arm_aon_wdt(void)
 #define DIAG_STAGE_8 do { } while (0)
 #endif
 
+
+/* ------------------------------------------------------------------ */
+/* Panel log console: the kernel log tail painted on the framebuffer by
+ * our own drawer.  The older DIAG_SCREEN engine drew whole rows and was
+ * fed from vprintk_emit (racy: several CPUs may enter vprintk_emit at
+ * once); a console .write callback is serialized by the printk core,
+ * which is the race fix.  CON_PRINTBUFFER replays the entire log
+ * buffer at registration, so nothing printed before the end of
+ * setup_arch() is lost.  Geometry: 8x16 VGA font at 2x, 40 columns x
+ * 39 rows, below the banner/grid/milestone instruments, above the
+ * mirrored bottom bar.
+ */
+#include <linux/diag_font.h>
+
+#define DIAG_FB_COLS	720U	/* not defined in this header's banner block */
+#define DIAG_TXT_TOP	128U	/* below the milestone dashes (row 110) */
+#define DIAG_TXT_BOTTOM	1548U	/* above the mirrored bar (row 1560)  */
+#define DIAG_TXT_GW	8U	/* font cell 8x16                     */
+#define DIAG_TXT_GH	16U
+#define DIAG_TXT_SX	2U	/* 16x32 px glyphs                    */
+#define DIAG_TXT_SY	2U
+#define DIAG_TXT_CW	(DIAG_TXT_GW * DIAG_TXT_SX + 2U)	/* 18 */
+#define DIAG_TXT_CH	(DIAG_TXT_GH * DIAG_TXT_SY + 4U)	/* 36 */
+#define DIAG_TXT_COLS	(DIAG_FB_STRIDE / 4UL / DIAG_TXT_CW)	/* 40 */
+#define DIAG_TXT_ROWS	((DIAG_TXT_BOTTOM - DIAG_TXT_TOP) / DIAG_TXT_CH)	/* 39 */
+#define DIAG_TXT_FG	0xffffffU
+#define DIAG_TXT_BG	0x000000U
+
+struct diag_txt_state {
+	bool ready;
+	unsigned int row;
+	unsigned int col;
+};
+
+/* defined exactly once, in arch/arm64/kernel/setup.c, next to the console */
+extern struct diag_txt_state diag_txt_state;
+
+static inline void diag_txt_pixel(u8 *p, u32 rgb)
+{
+	/* a8r8g8b8: bytes [B, G, R, A]; alpha 0xff or the DPU blends away */
+	p[0] = rgb & 0xff;
+	p[1] = (rgb >> 8) & 0xff;
+	p[2] = (rgb >> 16) & 0xff;
+	p[3] = 0xff;
+}
+
+/* one glyph at text position (row, col); the cursor does not move */
+static inline void diag_txt_glyph(unsigned int row, unsigned int col,
+				  unsigned char ch)
+{
+	u8 *base = (u8 *)phys_to_virt(DIAG_FB_PHYS) +
+		(unsigned long)(DIAG_TXT_TOP + row * DIAG_TXT_CH) * DIAG_FB_STRIDE +
+		(unsigned long)col * DIAG_TXT_CW * 4U;
+	const unsigned char *g = &diag_font_data[(unsigned int)ch * DIAG_TXT_GH];
+	unsigned int x, y, i, j;
+
+	for (y = 0; y < DIAG_TXT_GH; y++) {
+		u8 *line = base + (unsigned long)y * DIAG_TXT_SY * DIAG_FB_STRIDE;
+
+		for (x = 0; x < DIAG_TXT_GW; x++) {
+			u32 rgb = (g[y] & (0x80U >> x)) ? DIAG_TXT_FG : DIAG_TXT_BG;
+
+			for (i = 0; i < DIAG_TXT_SY; i++)
+				for (j = 0; j < DIAG_TXT_SX; j++)
+					diag_txt_pixel(line + i * DIAG_FB_STRIDE +
+						       (x * DIAG_TXT_SX + j) * 4U,
+						       rgb);
+		}
+	}
+	__flush_dcache_area(base, (size_t)DIAG_TXT_CH * DIAG_FB_STRIDE);
+}
+
+/* shift the text area up one glyph row and blank the last line */
+static inline void diag_txt_scroll(void)
+{
+	u8 *base = (u8 *)phys_to_virt(DIAG_FB_PHYS);
+	unsigned long top = (unsigned long)DIAG_TXT_TOP * DIAG_FB_STRIDE;
+	unsigned long area = (unsigned long)DIAG_TXT_ROWS *
+		(unsigned long)DIAG_TXT_CH * DIAG_FB_STRIDE;
+	unsigned long line = (unsigned long)DIAG_TXT_CH * DIAG_FB_STRIDE;
+	u8 *last = base + top + (unsigned long)(DIAG_TXT_ROWS - 1) * line;
+	u64 pat = 0xff000000ff000000ULL;	/* opaque black */
+	unsigned int i;
+
+	memmove(base + top, base + top + line, area - line);
+	for (i = 0; i < (unsigned int)line; i += 8)
+		*(u64 *)(last + i) = pat;
+	__flush_dcache_area(base + top, area);
+}
+
+static inline void diag_txt_newline(void)
+{
+	diag_txt_state.col = 0;
+	if (++diag_txt_state.row >= DIAG_TXT_ROWS) {
+		diag_txt_scroll();
+		diag_txt_state.row = DIAG_TXT_ROWS - 1;
+	}
+}
+
+/* the console .write callback body: feed formatted printk text */
+static inline void diag_txt_puts(const char *s, size_t n)
+{
+	if (!diag_txt_state.ready)
+		return;
+	while (n--) {
+		char c = *s++;
+
+		if (c == '\n')
+			diag_txt_newline();
+		else if (c == '\r')
+			diag_txt_state.col = 0;
+		else {
+			if (c == '\t')
+				c = ' ';
+			if (c < 0x20 || c > 0x7e)
+				c = '?';
+			diag_txt_glyph(diag_txt_state.row, diag_txt_state.col, c);
+			if (++diag_txt_state.col >= DIAG_TXT_COLS)
+				diag_txt_newline();
+		}
+	}
+}
+
+/* clear the text area and arm the console; called once from setup_arch() */
+static inline void diag_txt_init(void)
+{
+	u8 *base = (u8 *)phys_to_virt(DIAG_FB_PHYS);
+	unsigned long top = (unsigned long)DIAG_TXT_TOP * DIAG_FB_STRIDE;
+	unsigned long len = ((unsigned long)DIAG_TXT_BOTTOM -
+			     DIAG_TXT_TOP) * DIAG_FB_STRIDE;
+	u64 pat = 0xff000000ff000000ULL;	/* opaque black */
+	unsigned long y;
+	unsigned int i;
+
+	for (y = top; y < top + len; y += DIAG_FB_STRIDE) {
+		u8 *r = base + y;
+
+		for (i = 0; i < DIAG_FB_COLS * 4U; i += 8)
+			*(u64 *)(r + i) = pat;
+	}
+	__flush_dcache_area(base + top, len);
+	diag_txt_state.ready = true;
+	diag_txt_state.row = 0;
+	diag_txt_state.col = 0;
+}
+
 #endif /* _LINUX_DIAG_STAGE_H */
