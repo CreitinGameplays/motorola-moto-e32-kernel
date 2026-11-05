@@ -66,7 +66,7 @@
  * drawing there races the shared cursor and overwrites text.
  */
 #define DIAG_FB_PHYS	0x9e000000UL
-#define DIAG_FB_STRIDE	2160UL	/* 720 * 3 bytes: PORTRAIT 720x1600, shown 1:1 */
+#define DIAG_FB_STRIDE	2880UL	/* 720 * 4 bytes a8r8g8b8: PORTRAIT 720x1600 (measured 2026-11-05 on the 7.1 boot) */
 #define DIAG_FB_ROWS	1600U
 
 #if DIAG_SCREEN
@@ -78,7 +78,7 @@
 #define DIAG_CW		(DIAG_GLYPH_W * DIAG_SX + 2U)	/* 2 px column gap */
 #define DIAG_CH		(DIAG_GLYPH_H * DIAG_SY + 4U)	/* 4 px line gap */
 #define DIAG_TOP	48U
-#define DIAG_COLS	(DIAG_FB_STRIDE / 3UL / DIAG_CW)
+#define DIAG_COLS	(DIAG_FB_STRIDE / 4UL / DIAG_CW)
 #define DIAG_ROWS	((DIAG_FB_ROWS - DIAG_TOP) / DIAG_CH)
 #define DIAG_BG	0x000000U
 
@@ -113,9 +113,12 @@ static inline u8 *diag_screen_row(unsigned int row)
 
 static inline void diag_scr_pixel(u8 *p, u32 rgb)
 {
-	p[0] = (rgb >> 16) & 0xff;
+	/* a8r8g8b8: bytes [B, G, R, A]; alpha 0xff so the DPU does not
+	 * blend the pixel away */
+	p[0] = rgb & 0xff;
 	p[1] = (rgb >> 8) & 0xff;
-	p[2] = rgb & 0xff;
+	p[2] = (rgb >> 16) & 0xff;
+	p[3] = 0xff;
 }
 
 static inline void diag_scr_glyph(u8 *base, unsigned char ch)
@@ -133,7 +136,7 @@ static inline void diag_scr_glyph(u8 *base, unsigned char ch)
 				for (j = 0; j < DIAG_SX; j++)
 					diag_scr_pixel(line +
 						i * DIAG_FB_STRIDE +
-						(x * DIAG_SX + j) * 3U, rgb);
+						(x * DIAG_SX + j) * 4U, rgb);
 		}
 	}
 }
@@ -149,7 +152,7 @@ static inline void diag_screen_draw(unsigned int row, const char *text,
 		char c = (i < len && text[i] >= 0x20 && text[i] <= 0x7e) ?
 			 text[i] : ' ';
 
-		diag_scr_glyph(r + (unsigned long)i * DIAG_CW * 3U, c);
+		diag_scr_glyph(r + (unsigned long)i * DIAG_CW * 4U, c);
 	}
 	__flush_dcache_area(r, DIAG_CH * DIAG_FB_STRIDE);
 }
@@ -368,11 +371,12 @@ static inline void diag_screen_init(void) { }
 static inline void diag_bar_run(u8 *base, unsigned int y, unsigned int x,
 				unsigned int npix, u8 shade)
 {
-	u64 pat = 0x0101010101010101ULL * shade;
-	u8 *p = base + (unsigned long)y * DIAG_FB_STRIDE + (unsigned long)x * 3UL;
+	u32 px = 0xff000000u | (0x010101u * shade);
+	u64 pat = (u64)px | ((u64)px << 32);
+	u8 *p = base + (unsigned long)y * DIAG_FB_STRIDE + (unsigned long)x * 4UL;
 	unsigned int i;
 
-	for (i = 0; i < npix * 3U; i += 8)
+	for (i = 0; i < npix * 4U; i += 8)
 		*(u64 *)(p + i) = pat;
 }
 
@@ -383,7 +387,7 @@ static inline void diag_bar_rect(unsigned int x, unsigned int npix, u8 shade)
 	u8 *base = (u8 *)phys_to_virt(DIAG_FB_PHYS);
 	unsigned int y;
 
-	if (x >= DIAG_FB_STRIDE / 3UL || npix > DIAG_FB_STRIDE / 3UL - x)
+	if (x >= DIAG_FB_STRIDE / 4UL || npix > DIAG_FB_STRIDE / 4UL - x)
 		return;
 
 	for (y = 0; y < DIAG_BAR_ROWS; y++) {
