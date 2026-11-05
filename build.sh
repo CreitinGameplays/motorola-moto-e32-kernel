@@ -59,6 +59,12 @@ $S --enable VIRTUALIZATION --enable KVM --enable KVM_ARM_HOST \
    --enable VHOST_NET --enable VHOST_CROSS_ENDIAN_LEGACY \
    --enable VSOCKETS --enable MMU_NOTIFIER --enable PREEMPT_NOTIFIERS
 
+# kexec: boot another Image (+DTB) from userspace without touching flash.
+# Added for the modern-kernel bring-up (docs/21): a kexec'd test kernel
+# that hangs costs only a power cycle (the boot slot is never touched, no
+# BROM recovery), and the next boot can read the test kernel's pstore log.
+$S --enable KEXEC
+
 M="make O=$OUT ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang \
    LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm OBJDUMP=llvm-objdump"
 $M olddefconfig

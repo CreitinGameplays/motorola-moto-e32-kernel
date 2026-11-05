@@ -14,8 +14,10 @@
 #include <asm/sections.h>
 
 /* vmcoreinfo stuff */
-static unsigned char *vmcoreinfo_data;
-static size_t vmcoreinfo_size;
+/* sprd: exported for the vendor minidump (sprd_vmcoreinfo.h) */
+unsigned char *vmcoreinfo_data;
+/* sprd: exported for the vendor minidump (sprd_vmcoreinfo.h) */
+size_t vmcoreinfo_size;
 u32 *vmcoreinfo_note;
 
 /* trusted vmcoreinfo, e.g. we can make a copy in the crash memory */

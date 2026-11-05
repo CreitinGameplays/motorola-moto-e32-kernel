@@ -1318,3 +1318,10 @@ source "arch/arm64/crypto/Kconfig"
 endif
 
 source "lib/Kconfig"
+
+config HAWAII_KEXEC_TEST
+	bool "Hawaii: kexec handoff proof (ring marker + PSCI reset at stext)"
+	help
+	  Test-only: at the very start of the kernel, write a marker into
+	  the pstore ramoops console ring and issue a PSCI SYSTEM_RESET.
+	  Leave off for normal builds.

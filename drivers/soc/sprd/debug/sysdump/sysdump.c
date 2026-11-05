@@ -151,7 +151,7 @@ extern void get_native_hang_monitor_buffer(unsigned long *addr, unsigned long *s
 typedef char note_buf_t[SYSDUMP_NOTE_BYTES];
 
 static DEFINE_PER_CPU(note_buf_t, crash_notes_temp);
-note_buf_t __percpu *crash_notes;
+note_buf_t __percpu *sprd_crash_notes;
 
 /* An ELF note in memory */
 struct memelfnote {
@@ -352,7 +352,7 @@ void crash_note_save_cpu(struct pt_regs *regs, int cpu)
 	fill_prstatus(&prstatus, current, 0);
 	memcpy(&prstatus.pr_reg, regs, DUMP_REGS_SIZE);
 	/* memcpy(&prstatus.pr_reg, regs, sizeof(struct pt_regs)); */
-	storenote(&notes, (char *)per_cpu_ptr(crash_notes, cpu));
+	storenote(&notes, (char *)per_cpu_ptr(sprd_crash_notes, cpu));
 }
 
 static void sysdump_fill_core_hdr(struct pt_regs *regs, char *bufp)
@@ -528,7 +528,7 @@ static int sysdump_panic_event(struct notifier_block *self,
 
 		sprd_sysdump_info = (struct sysdump_info *)phys_to_virt(sprd_sysdump_info_paddr);
 		pr_emerg("vaddr is %p, paddr is %p.\n", sprd_sysdump_info, (void *)sprd_sysdump_info_paddr);
-		crash_notes = &crash_notes_temp;
+		sprd_crash_notes = &crash_notes_temp;
 	}
 
 	/* this should before smp_send_stop() to make sysdump_ipi enable */
@@ -615,8 +615,8 @@ void sysdump_ipi(struct pt_regs *regs)
 {
 	int cpu = smp_processor_id();
 
-	if (crash_notes == NULL)
-		crash_notes = &crash_notes_temp;
+	if (sprd_crash_notes == NULL)
+		sprd_crash_notes = &crash_notes_temp;
 
 	/*do flush and save only in oops path */
 	if (oops_in_progress) {
@@ -1589,7 +1589,7 @@ int sysdump_sysctl_init(void)
 	if (!sysdump_sysctl_hdr)
 		return -ENOMEM;
 
-	crash_notes = &crash_notes_temp;
+	sprd_crash_notes = &crash_notes_temp;
 
 	if (input_register_handler(&sysdump_handler))
 		pr_err("regist sysdump_handler failed.\n");
