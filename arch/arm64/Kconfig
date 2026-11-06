@@ -2487,3 +2487,17 @@ config HAWAII_KEXEC_TEST
 	  kernel.  Proves the kexec handoff reached this kernel and that the
 	  firmware provides a warm reset with no driver/clock dependencies.
 	  Leave off for normal boots.
+
+config DIAGFB_FULL_LOG
+	bool "Panel console: full kernel log until userspace (debug)"
+	default n
+	help
+	  The diagfb panel console paints only progress lines by default
+	  (mode 0).  Say y to start in mode 1: the full kernel log on the
+	  panel until /init execs, then it reverts to progress-only
+	  automatically - a full log painted past the init exec has to
+	  scroll 4 MB of framebuffer per line under userspace log spam and
+	  can stall the console lock and the 1 Hz heartbeat/watchdog timer.
+	  Runtime switch: /proc/diagfb_log (0 = progress only, 1 = full
+	  until init, 2 = full with no auto-quiet, debug only).  For the
+	  Moto E32 (hawaii) bring-up.

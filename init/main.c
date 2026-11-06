@@ -1037,6 +1037,7 @@ void start_kernel(void)
 
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
+	DIAG_PROGRESS("kernel: start_kernel");
 	debug_objects_early_init();
 	init_vmlinux_build_id();
 
@@ -1652,6 +1653,12 @@ static int __ref kernel_init(void *unused)
 
 	diag_status(0, 1);	/* init will exec now */
 	hawaii_boot_progress("init exec");
+	DIAG_PROGRESS("kernel: starting %s",
+		      ramdisk_execute_command ? ramdisk_execute_command : "init");
+	/* the panic guard: from here on, mode 1 no longer paints the full
+	 * log - userspace log volume plus the per-line 4 MB scroll would
+	 * stall the console lock and the heartbeat/watchdog timer */
+	diag_panel_boot_done = true;
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -2040,6 +2047,7 @@ static noinline void __init kernel_init_freeable(void)
 
 	do_basic_setup();
 	DIAG_BOOTBAR_FULL;
+	DIAG_PROGRESS("kernel: drivers initialized");
 
 	kunit_run_all_tests();
 

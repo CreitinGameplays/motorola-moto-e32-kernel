@@ -18,6 +18,9 @@
 #include <linux/screen_info.h>
 #include <linux/diag_stage.h>
 #include <linux/init.h>
+#include <linux/string.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
 #include <linux/cpu.h>
@@ -58,19 +61,86 @@
 
 
 /*
- * Panel log console: the diag text engine as a printk console driver.
- * Registered at the end of setup_arch() with CON_PRINTBUFFER, which
- * replays the whole log buffer through the painter first, then carries
- * every later printk live.  Not CON_BOOT, so nothing ever unregisters
- * it: the panel log stays for the whole boot (and the freeze).
+ * Panel progress console: the diag text engine as a printk console
+ * driver, but only for what the panel log policy lets through.  The
+ * full-log variant was the bring-up channel and an expensive one: every
+ * record painted 40-90 glyphs and each glyph used to clean the whole
+ * text band, so a normal boot spent seconds painting driver spam - and
+ * past the init exec the same traffic scrolls 4 MB per line while
+ * userspace floods the ring, stalling the console lock and the 1 Hz
+ * heartbeat/watchdog timer (the post-boot crash risk).  Registered at
+ * the end of setup_arch() with CON_PRINTBUFFER, which replays the log
+ * buffer through the filter first.  Not CON_BOOT, so nothing ever
+ * unregisters it.
  */
 struct diag_txt_state diag_txt_state;
 struct diag_klog diag_klog;
 
+int diag_panel_log_mode = IS_ENABLED(CONFIG_DIAGFB_FULL_LOG) ? 1 : 0;
+bool diag_panel_boot_done;
+
+/* the console .write path's line state (printk-serialized) */
+static struct diag_panel_line diag_console_line;
+
+/* mode 2 ignores boot_done; mode 1 auto-reverts to progress-only once
+ * /init is about to exec (the panic guard) */
+static bool diag_panel_full_log(void)
+{
+	if (diag_panel_log_mode == 2)
+		return true;
+	return diag_panel_log_mode == 1 && !diag_panel_boot_done;
+}
+
+/* lines painted in EVERY mode: progress marks, the H71-* test markers
+ * and crash signatures (a panic must still be visible when quiet) */
+static bool diag_line_always(const char *line)
+{
+	return strstr(line, DIAG_PROGRESS_TAG) ||
+	       strstr(line, "H71-") ||
+	       strstr(line, "HAWAII-BOOTWDT") ||
+	       strstr(line, "Kernel panic") ||
+	       strstr(line, "Internal error") ||
+	       strstr(line, "Asynchronous SError") ||
+	       strstr(line, "Unable to handle") ||
+	       strstr(line, "Call trace") ||
+	       strstr(line, "BUG:") ||
+	       strstr(line, "WARNING:");
+}
+
+void diag_panel_write(struct diag_panel_line *st, const char *s, size_t n)
+{
+	while (n--) {
+		char c = *s++;
+
+		if (c == '\n') {
+			if (!st->skip && st->len) {
+				st->buf[st->len++] = '\n';
+				st->buf[st->len] = '\0';
+				if (diag_panel_full_log() ||
+				    diag_line_always(st->buf))
+					diag_txt_puts(st->buf, st->len);
+			}
+			st->skip = false;
+			st->len = 0;
+			continue;
+		}
+		if (st->skip || c == '\r')
+			continue;
+		if (st->len >= sizeof(st->buf) - 2) {
+			/* overlong record: progress and H71 lines are
+			 * short, so this is ordinary log spam - drop it */
+			st->skip = true;
+			st->len = 0;
+			continue;
+		}
+		st->buf[st->len++] = c;
+	}
+}
+
 static void diag_console_write(struct console *con, const char *s,
 			       unsigned int n)
 {
-	diag_txt_puts(s, n);
+	diag_panel_write(&diag_console_line, s, n);
 }
 
 static struct console diag_console = {
@@ -79,6 +149,61 @@ static struct console diag_console = {
 	.flags	= CON_PRINTBUFFER | CON_ENABLED | CON_ANYTIME,
 	.index	= -1,
 };
+
+/*
+ * /proc/diagfb_log - runtime switch for the panel log policy:
+ *   echo 0 > /proc/diagfb_log   progress only (default)
+ *   echo 1 > /proc/diagfb_log   full log until /init, then auto-quiet
+ *   echo 2 > /proc/diagfb_log   full log, no auto-quiet (debug override)
+ * Read shows "<mode> <boot_done>".  Mode 2 is the only way to keep the
+ * full log past the init exec - it can stall the console and the
+ * heartbeat/watchdog timer, use it for debugging only.
+ */
+static int diagfb_log_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d %d\n", diag_panel_log_mode,
+		   diag_panel_boot_done ? 1 : 0);
+	return 0;
+}
+
+static int diagfb_log_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, diagfb_log_show, NULL);
+}
+
+static ssize_t diagfb_log_write(struct file *file, const char __user *buf,
+				size_t count, loff_t *ppos)
+{
+	char tmp[16];
+	int mode;
+
+	if (count >= sizeof(tmp))
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+	tmp[count] = '\0';
+	if (kstrtoint(strim(tmp), 0, &mode) || mode < 0 || mode > 2)
+		return -EINVAL;
+	diag_panel_log_mode = mode;
+	pr_info("diagfb: panel log mode %d (0=progress 1=full-until-init 2=full)\n",
+		mode);
+	return count;
+}
+
+static const struct proc_ops diagfb_log_ops = {
+	.proc_open	= diagfb_log_open,
+	.proc_read	= seq_read,
+	.proc_write	= diagfb_log_write,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= single_release,
+};
+
+static int __init diagfb_log_init(void)
+{
+	proc_create("diagfb_log", 0644, NULL, &diagfb_log_ops);
+	return 0;
+}
+late_initcall(diagfb_log_init);
 
 static int num_standard_resources;
 static struct resource *standard_resources;
@@ -402,8 +527,8 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	smp_init_cpus();
 	smp_build_mpidr_hash();
 
-	/* the panel log console: CON_PRINTBUFFER replays everything
-	 * printed so far, then every printk lands on the panel */
+	/* the panel console: CON_PRINTBUFFER replays the log through the
+	 * panel log policy filter, then every new record goes through it */
 	diag_txt_init();
 	register_console(&diag_console);
 	/* force the CON_PRINTBUFFER backlog through NOW: the 7.1
@@ -413,6 +538,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 * console_init's own console_lock use pre-scheduler). */
 	console_lock();
 	console_unlock();
+	DIAG_PROGRESS("kernel: setup_arch done");
 
 	/* the printk-independent log painter: rewind to the oldest record
 	 * and paint the whole backlog now - no console machinery needed */

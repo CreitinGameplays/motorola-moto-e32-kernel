@@ -254,8 +254,52 @@ static inline void diag_heartbeat(int on)
  * dashes, stopping above the mirrored bottom bar.  .write is
  * serialized by the printk core, so the shared cursor is safe (this is
  * why the 4.14's vprintk_emit mirror was racy and this is not).
+ *
+ * WHAT gets painted is governed by the panel log policy below: by
+ * default only progress lines (plus the H71-* test markers and crash
+ * signatures); the full kernel log is a debug mode that can be enabled
+ * at build time (CONFIG_DIAGFB_FULL_LOG) or at runtime (/proc/diagfb_log).
  */
 #include <linux/diag_font.h>
+#include <linux/printk.h>
+
+/* Panel log policy.  int diag_panel_log_mode (defined in setup.c):
+ *   0 = progress only (default): boot-progress lines, the H71-* test
+ *       markers and crash signatures - a handful of glyphs per boot
+ *   1 = full kernel log until userspace starts, then back to mode 0
+ *   2 = full kernel log, no auto-quiet (explicit debug override)
+ *
+ * diag_panel_boot_done is set when /init is about to exec.  The
+ * auto-quiet of mode 1 is the panic guard: a full log painted past the
+ * init exec has to scroll 4 MB of framebuffer per line while userspace
+ * floods the ring - the console lock and the 1 Hz heartbeat/watchdog
+ * timer then stall and the system dies (measured as the post-boot
+ * crash risk of the bring-up builds).
+ */
+extern int diag_panel_log_mode;
+extern bool diag_panel_boot_done;
+
+/* mark a line as boot progress: the ONE thing that is painted in every
+ * mode.  KERN_INFO is enough here - unlike the 4.14 console-only tree,
+ * the kmsg painter reads the ring directly and ignores the loglevel
+ * (the vendor bootargs say loglevel=1), so an EMERG level would only
+ * make the console paint a second copy of every progress line. */
+#define DIAG_PROGRESS_TAG "diag: "
+#define DIAG_PROGRESS(fmt, ...) \
+	printk(KERN_INFO DIAG_PROGRESS_TAG fmt "\n", ##__VA_ARGS__)
+
+/* one line-assembly state per painting path (they never share): the
+ * console .write is serialized by the printk core, the kmsg painter
+ * runs from boot-core milestones and the 1 Hz heartbeat timer. */
+struct diag_panel_line {
+	char buf[512];
+	unsigned int len;
+	bool skip;
+};
+
+/* filter + paint a raw chunk of log text (records may be split across
+ * calls); implemented once in setup.c */
+void diag_panel_write(struct diag_panel_line *st, const char *s, size_t n);
 
 #define DIAG_TXT_TOP	128U	/* below the milestone dashes (row 110) */
 #define DIAG_TXT_BOTTOM	1548U	/* above the mirrored bar (row 1560)  */
@@ -312,7 +356,13 @@ static inline void diag_txt_glyph(unsigned int row, unsigned int col,
 						       rgb);
 		}
 	}
-	dcache_clean_inval_poc(a, a + (unsigned long)DIAG_TXT_CH * DIAG_FB_STRIDE);
+	/* write back only this glyph cell's scanlines: cleaning the whole
+	 * 36-row band (~103 KB) per glyph was the single largest painting
+	 * cost of the full-log console */
+	for (y = 0; y < DIAG_TXT_GH * DIAG_TXT_SY; y++)
+		dcache_clean_inval_poc(a + (unsigned long)y * DIAG_FB_STRIDE,
+					a + (unsigned long)y * DIAG_FB_STRIDE +
+					(unsigned long)DIAG_TXT_GW * DIAG_TXT_SX * 4U);
 }
 
 /* shift the text area up one glyph row and blank the last line */
@@ -433,22 +483,29 @@ static inline void diag_txt_hb(unsigned int secs)
 struct diag_klog {
 	bool ready;
 	struct kmsg_dump_iter iter;
+	struct diag_panel_line panel;
 	char line[DIAG_KLOG_LINE];
 };
 
 extern struct diag_klog diag_klog;
 
-/* paint every record the iterator has not painted yet */
+/* paint every record the iterator has not painted yet; per call, at
+ * most DIAG_KLOG_MAX lines - under userspace log spam an unbounded
+ * drain would format the whole ring every heartbeat tick */
+#define DIAG_KLOG_MAX	256
+
 static inline void diag_paint_newlog(void)
 {
 	size_t len;
+	int n = 0;
 
 	if (!diag_klog.ready)
 		return;
-	while (kmsg_dump_get_line(&diag_klog.iter, false,
+	while (n++ < DIAG_KLOG_MAX &&
+	       kmsg_dump_get_line(&diag_klog.iter, false,
 				  diag_klog.line,
 				  sizeof(diag_klog.line) - 1, &len))
-		diag_txt_puts(diag_klog.line, len);
+		diag_panel_write(&diag_klog.panel, diag_klog.line, len);
 }
 
 /* fixed overlay line at text row 0/1 - no cursor impact, no printk */
