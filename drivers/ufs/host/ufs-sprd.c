@@ -610,7 +610,10 @@ static int ufs_sprd_probe(struct platform_device *pdev)
 	const struct of_device_id *of_id;
 
 	of_id = of_match_node(ufs_sprd_of_match, dev->of_node);
+	dev_info(dev, "probe entry (of_id %s)",
+		 of_id ? of_id->compatible : "<NO MATCH>");
 	err = ufshcd_pltfrm_init(pdev, of_id->data);
+	dev_info(dev, "ufshcd_pltfrm_init() = %d", err);
 	if (err)
 		dev_err(dev, "ufshcd_pltfrm_init() failed %d\n", err);
 
