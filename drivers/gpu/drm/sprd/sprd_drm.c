@@ -224,6 +224,111 @@ static const struct of_device_id drm_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, drm_match_table);
 
+/*
+ * Boot-loader DT fixup: the LK dtbo overlay merge rewrites phandles and
+ * leaves the display graph's remote-endpoint references scrambled (seen
+ * on the 7.1 boots: the dpu -> dsi link survives, but the dsi port@0 and
+ * panel endpoints point at bogus nodes and the dsi port@1 endpoint
+ * points back at the DPU - so devm_drm_of_get_bridge() resolves the
+ * wrong remote and sprd_dsi_bind() fails silently with -ENODEV,
+ * leaving the component master with "failed to bind all component").
+ * The vendor 4.14 drivers never notice because their panel discovery
+ * uses of_drm_find_panel() over /lcds instead of the OF graph.
+ *
+ * Recompute the four remote-endpoint values from the node structure -
+ * located by path, so no phandle-numbering assumptions are made:
+ *   dpu@31000000/port/endpoint        <-> dsi@31100000/ports/port@0
+ *   dsi@31100000/ports/port@1/endpoint<-> dsi@31100000/panel/port@1
+ */
+static int h71_read_phandle(struct device_node *np, __be32 *out)
+{
+	const __be32 *ph;
+	int len;
+
+	ph = of_get_property(np, "phandle", &len);
+	if (!ph || len != 4)
+		return -ENODEV;
+	*out = *ph;
+	return 0;
+}
+
+static int h71_set_remote(struct device_node *np, __be32 value)
+{
+	struct property *old, *new;
+
+	old = of_find_property(np, "remote-endpoint", NULL);
+	if (!old)
+		return -ENODEV;
+	new = kzalloc(sizeof(*new) + 4, GFP_KERNEL);
+	if (!new)
+		return -ENOMEM;
+	new->name = "remote-endpoint";
+	new->length = 4;
+	new->value = new + 1;
+	memcpy(new->value, &value, 4);
+	of_remove_property(np, old);
+	of_add_property(np, new);
+	return 0;
+}
+
+static int __init sprd_drm_fix_graph(void)
+{
+	struct device_node *np;
+	__be32 dpu, dsi_p0, dsi_p1, panel;
+
+	np = of_find_node_by_path("/soc/ap-ahb/dpu@31000000/port/endpoint");
+	if (!np)
+		return 0;
+	dpu = 0;
+	h71_read_phandle(np, &dpu);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/ports/port@0/endpoint");
+	if (!np)
+		return 0;
+	dsi_p0 = 0;
+	h71_read_phandle(np, &dsi_p0);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/ports/port@1/endpoint");
+	if (!np)
+		return 0;
+	dsi_p1 = 0;
+	h71_read_phandle(np, &dsi_p1);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/panel/port@1/endpoint");
+	if (!np)
+		return 0;
+	panel = 0;
+	h71_read_phandle(np, &panel);
+	of_node_put(np);
+
+	/* only touch a tree that carries all four endpoints */
+	if (!dpu || !dsi_p0 || !dsi_p1 || !panel)
+		return 0;
+
+	np = of_find_node_by_path("/soc/ap-ahb/dpu@31000000/port/endpoint");
+	h71_set_remote(np, dsi_p1);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/ports/port@0/endpoint");
+	h71_set_remote(np, dpu);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/ports/port@1/endpoint");
+	h71_set_remote(np, panel);
+	of_node_put(np);
+
+	np = of_find_node_by_path("/soc/ap-ahb/dsi@31100000/panel/port@1/endpoint");
+	h71_set_remote(np, dsi_p1);
+	of_node_put(np);
+
+	pr_info("H71-DRM: display graph phandles recomputed (dpu<->dsi-p0, dsi-p1<->panel)\n");
+	return 0;
+}
+early_initcall(sprd_drm_fix_graph);
+
 static struct platform_driver sprd_drm_driver = {
 	.probe = sprd_drm_probe,
 	.remove = sprd_drm_remove,
