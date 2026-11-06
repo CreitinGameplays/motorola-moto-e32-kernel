@@ -795,11 +795,24 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 	if (ctx->irq < 0)
 		return ctx->irq;
 
-	ctx->clk = devm_clk_get_optional_enabled(dev, "core");
-	if (IS_ERR(ctx->clk)) {
-		dev_err(dev, "failed to get DPU core clock\n");
-		return PTR_ERR(ctx->clk);
+	/* The vendor DTB (dpu@31000000) names its clocks clk_src_96m ..
+	 * clk_dpu_core, clk_dpu_dpi, clk_ap_ahb_disp_eb, clk_dsi_iso_sw_en,
+	 * dsi_div6clk_gate - the upstream port expected a single "core"
+	 * clock this DTB does not have, so the display module clocks were
+	 * never enabled and the panel stayed dark (test 59: DPHY PLL locked
+	 * only on leftover bootloader clocks, no scanout).  Enable them all,
+	 * like the vendor dpu clock ops does. */
+	for (int i = 0; ; i++) {
+		struct clk *clk = of_clk_get(dev->of_node, i);
+
+		if (IS_ERR(clk))
+			break;
+		if (clk_prepare_enable(clk))
+			dev_err(dev, "failed to enable clock #%d\n", i);
+		else
+			dev_dbg(dev, "clock #%d enabled\n", i);
 	}
+	ctx->clk = NULL;
 
 	/* disable and clear interrupts before register dpu IRQ. */
 	writel(0x00, ctx->base + REG_DPU_INT_EN);

@@ -1114,10 +1114,20 @@ static int sprd_dsi_probe(struct platform_device *pdev)
 	if (!dsi->ctx.pll.platform)
 		return -EINVAL;
 
-	dsi->ctx.clk = devm_clk_get_optional(dev, "pclk");
-	if (IS_ERR(dsi->ctx.clk))
-		return dev_err_probe(dev, PTR_ERR(dsi->ctx.clk),
-				     "failed to get pclk\n");
+	/* The vendor DTB (dsi@31100000) names its single clock
+	 * "clk_ap_ahb_dsi_eb" - the upstream port expected "pclk", which
+	 * this DTB does not have, so the DSI APB gate was never enabled
+	 * (test 59: it only worked on leftover bootloader clocks).  Enable
+	 * every clock on the node. */
+	for (int i = 0; ; i++) {
+		struct clk *clk = of_clk_get(dev->of_node, i);
+
+		if (IS_ERR(clk))
+			break;
+		if (clk_prepare_enable(clk))
+			dev_err(dev, "failed to enable dsi clock #%d\n", i);
+	}
+	dsi->ctx.clk = NULL;
 
 	return mipi_dsi_host_register(&dsi->host);
 }
