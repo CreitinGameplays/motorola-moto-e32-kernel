@@ -81,6 +81,11 @@ struct panel_info {
 	u32 power_gpio_delay;
 	u32 bit_clk_khz;	/* sprd,phy-bit-clock (kHz, vendor units) */
 	u32 esc_clk_khz;	/* sprd,phy-escape-clock (kHz, capped 20 MHz) */
+	/* oled-backlight child of the LCD node: a DCS brightness command
+	 * (this panel: 23 00 00 02 51 ff = SET_DISPLAY_BRIGHTNESS) */
+	void *bl_cmd;		/* writable copy (payload[1] = level) */
+	int bl_cmd_len;
+	u32 bl_max_level;
 };
 
 struct sprd_panel {
@@ -235,6 +240,12 @@ static int sprd_panel_enable(struct drm_panel *p)
 	sprd_panel_send_cmds(panel->slave,
 			     panel->info.cmds[CMD_CODE_INIT],
 			     panel->info.cmds_len[CMD_CODE_INIT]);
+	/* the DCS brightness command (patched to the DT default level at
+	 * parse time) - without it this LCD stays invisible */
+	if (panel->info.bl_cmd)
+		sprd_panel_send_cmds(panel->slave,
+				     panel->info.bl_cmd,
+				     panel->info.bl_cmd_len);
 	mutex_unlock(&panel_lock);
 
 	return 0;
@@ -284,7 +295,7 @@ static int sprd_panel_parse_lcd(struct device_node *lcd_node,
 	u32 bus_flags = 0, val;
 	const char *str;
 	const void *p;
-	int bytes;
+	int bytes, ret;
 
 	info->of_node = lcd_node;
 
@@ -396,7 +407,44 @@ static int sprd_panel_parse_lcd(struct device_node *lcd_node,
 
 	/* the LCD node has a display-timings child with timing0/1; use
 	 * timing0 as the (preferred) native mode, like the vendor driver */
-	return of_get_drm_display_mode(lcd_node, &info->mode, &bus_flags, 0);
+	ret = of_get_drm_display_mode(lcd_node, &info->mode, &bus_flags, 0);
+	if (ret)
+		return ret;
+
+	/* the oled-backlight child carries the DCS brightness command
+	 * (vendor of_parse_oled_cmds): one dsi_cmd_desc whose payload[1]
+	 * is the brightness level - without it the panel stays dark */
+	{
+		struct device_node *bl = of_get_child_by_name(lcd_node,
+				"oled-backlight");
+		const void *p;
+		int bytes;
+
+		if (bl) {
+			info->bl_max_level = 255;
+			of_property_read_u32(bl, "sprd,max-level",
+					     &info->bl_max_level);
+			p = of_get_property(bl, "brightness-levels", &bytes);
+			if (p && bytes > 4) {
+				info->bl_cmd = kmemdup(p, bytes, GFP_KERNEL);
+				info->bl_cmd_len = bytes;
+				/* level = default * max / 255 (vendor math) */
+				of_property_read_u32(bl,
+					"default-brightness-level", &val);
+				{
+					u32 level = val * info->bl_max_level / 255;
+					struct dsi_cmd_desc *c = info->bl_cmd;
+					u16 len = (c->wc_h << 8) | c->wc_l;
+
+					if (len >= 2)
+						c->payload[1] = level;
+				}
+			}
+			of_node_put(bl);
+		}
+	}
+
+	return 0;
 }
 
 static int sprd_panel_probe(struct mipi_dsi_device *slave)
