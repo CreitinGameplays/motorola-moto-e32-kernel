@@ -174,6 +174,23 @@ static int sprd_musb_init(struct musb *musb)
 		ret = sprd_otg_switch_init(glue);
 		if (ret)
 			goto err_otg_switch_init;
+	} else if (musb->port_mode == MUSB_PERIPHERAL) {
+		/* Gadget-only builds never register the role switch, so
+		 * nothing else on this path powers the UTMI analog - and
+		 * without the PHY the host sees nothing at all: the UDC
+		 * registers, g_serial binds, MUSB_POWER_SOFTCONN pulls
+		 * D+ up, but the lines stay dead (tests 44-47: no COM
+		 * port on the PC, ever).  The vendor 4.14 musb_sprd.c
+		 * reaches the same registers through its enable op.
+		 */
+		ret = phy_power_on(glue->phy);
+		if (ret) {
+			phy_exit(glue->phy);
+			return ret;
+		}
+		phy_set_mode(glue->phy, PHY_MODE_USB_DEVICE);
+		dev_info(musb->controller,
+			 "peripheral mode: UTMI phy powered + device mode\n");
 	}
 
 	return 0;
@@ -191,6 +208,8 @@ static int sprd_musb_exit(struct musb *musb)
 
 	sprd_otg_switch_set(glue, USB_ROLE_NONE);
 	sprd_otg_switch_exit(glue);
+	if (musb->port_mode == MUSB_PERIPHERAL)
+		phy_power_off(glue->phy);
 	phy_exit(glue->phy);
 	clk_disable_unprepare(glue->clk);
 
