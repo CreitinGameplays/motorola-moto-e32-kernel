@@ -79,6 +79,8 @@ struct panel_info {
 	u32 mode_flags;
 	bool use_dcs;
 	u32 power_gpio_delay;
+	u32 bit_clk_khz;	/* sprd,phy-bit-clock (kHz, vendor units) */
+	u32 esc_clk_khz;	/* sprd,phy-escape-clock (kHz, capped 20 MHz) */
 };
 
 struct sprd_panel {
@@ -340,6 +342,20 @@ static int sprd_panel_parse_lcd(struct device_node *lcd_node,
 
 	info->use_dcs = of_property_read_bool(lcd_node, "sprd,use-dcs-write");
 
+	/* DPHY clocks: the vendor driver feeds the raw DT value (kHz) to
+	 * its own phy; the 7.1 stack reads hs_rate/lp_rate from the DSI
+	 * device in Hz, so convert (megacores_pll.c: freq/1e6 -> MHz vs
+	 * the ums9230 fvco bands 1250..2500, so 844000 kHz -> 844 MHz
+	 * -> x2 = 1688 MHz fvco) */
+	info->bit_clk_khz = 500000;
+	of_property_read_u32(lcd_node, "sprd,phy-bit-clock",
+			     &info->bit_clk_khz);
+	info->esc_clk_khz = 20000;
+	of_property_read_u32(lcd_node, "sprd,phy-escape-clock",
+			     &info->esc_clk_khz);
+	if (info->esc_clk_khz > 20000)
+		info->esc_clk_khz = 20000;
+
 	sprd_panel_parse_reset_seq(lcd_node, &info->rst_on_seq,
 				   "sprd,reset-on-sequence");
 	sprd_panel_parse_reset_seq(lcd_node, &info->rst_off_seq,
@@ -442,6 +458,8 @@ static int sprd_panel_probe(struct mipi_dsi_device *slave)
 	slave->lanes = panel->info.lanes;
 	slave->format = panel->info.format;
 	slave->mode_flags = panel->info.mode_flags;
+	slave->hs_rate = (unsigned long)panel->info.bit_clk_khz * 1000;
+	slave->lp_rate = (unsigned long)panel->info.esc_clk_khz * 1000;
 
 	ret = mipi_dsi_attach(slave);
 	if (ret) {
