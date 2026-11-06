@@ -434,6 +434,18 @@ static inline void diag_bootbar(unsigned int seg0, unsigned int seg1,
  */
 void diag_stage_mirror(const char *text, size_t len);
 
+/*
+ * Production boot-progress line: the ONLY printk text the panel console
+ * paints.  The console drops every other record before it reaches the
+ * painter, so a boot costs a handful of glyph draws instead of repainting
+ * the whole kernel log (which also made every driver message pay a glyph
+ * paint plus cache maintenance).  Call sites stay in the boot core:
+ * setup_arch, mm_init, the initcall phases and exec of /init.
+ */
+#define DIAG_PROGRESS_TAG "diag: "
+#define DIAG_PROGRESS(fmt, ...) \
+	printk(KERN_INFO DIAG_PROGRESS_TAG fmt "\n", ##__VA_ARGS__)
+
 
 #define DIAG_PANIC_STAGE 0
 #define DIAG_ARM_STAGE 0
@@ -586,7 +598,13 @@ static inline void diag_initcall_checkpoint(initcall_t fn, const char *level,
 	do { if (DIAG_CHECKPOINT_KIND == 2 || DIAG_CHECKPOINT_KIND == 3) \
 		diag_initcall_checkpoint((fn), (level), (ordinal)); } while (0)
 
+#if DIAG_SCREEN
 #define DIAG_INITCALL_LOG(fn) diag_log_initcall(fn)
+#else
+/* production: one pr_emerg + kallsyms lookup per initcall was pure
+ * overhead (measured as the dominant console cost of a normal boot) */
+#define DIAG_INITCALL_LOG(fn) do { } while (0)
+#endif
 
 #define DIAG_PAINT 0
 
@@ -838,7 +856,12 @@ static inline void diag_txt_glyph(unsigned int row, unsigned int col,
 						       rgb);
 		}
 	}
-	__flush_dcache_area(base, (size_t)DIAG_TXT_CH * DIAG_FB_STRIDE);
+	/* write back only this glyph cell's scanlines: flushing the whole
+	 * 36-row band (DIAG_TXT_CH * DIAG_FB_STRIDE, ~103 KB) per glyph was
+	 * the single largest boot-logging cost in the full-log console */
+	for (y = 0; y < DIAG_TXT_GH * DIAG_TXT_SY; y++)
+		__flush_dcache_area(base + (unsigned long)y * DIAG_FB_STRIDE,
+				    (size_t)DIAG_TXT_GW * DIAG_TXT_SX * 4U);
 }
 
 /* shift the text area up one glyph row and blank the last line */

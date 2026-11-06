@@ -554,6 +554,7 @@ asmlinkage __visible void __init start_kernel(void)
 	DIAG_EARLY_HOOK(2);
 	smp_setup_processor_id();
 	DIAG_EARLY_HOOK(3);
+	DIAG_PROGRESS("kernel: start_kernel");
 	debug_objects_early_init();
 	DIAG_EARLY_HOOK(4);
 
@@ -627,6 +628,7 @@ asmlinkage __visible void __init start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_init();
+	DIAG_PROGRESS("kernel: memory initialized");
 
 	ftrace_init();
 
@@ -984,31 +986,24 @@ static void __init do_initcalls(void)
  */
 static void __init do_basic_setup(void)
 {
-	pr_emerg("DIAG: setup cpuset_init_smp\n");
 	DIAG_SETUP_STATUS("cpuset_init_smp");
 	DIAG_SETUP_CHECKPOINT(1, "cpuset_init_smp");
 	cpuset_init_smp();
-	pr_emerg("DIAG: setup shmem_init\n");
 	DIAG_SETUP_STATUS("shmem_init");
 	DIAG_SETUP_CHECKPOINT(2, "shmem_init");
 	shmem_init();
-	pr_emerg("DIAG: setup driver_init\n");
 	DIAG_SETUP_STATUS("driver_init");
 	DIAG_SETUP_CHECKPOINT(3, "driver_init");
 	driver_init();
-	pr_emerg("DIAG: setup init_irq_proc\n");
 	DIAG_SETUP_STATUS("init_irq_proc");
 	DIAG_SETUP_CHECKPOINT(4, "init_irq_proc");
 	init_irq_proc();
-	pr_emerg("DIAG: setup do_ctors\n");
 	DIAG_SETUP_STATUS("do_ctors");
 	DIAG_SETUP_CHECKPOINT(5, "do_ctors");
 	do_ctors();
-	pr_emerg("DIAG: setup usermodehelper_enable\n");
 	DIAG_SETUP_STATUS("usermodehelper_enable");
 	DIAG_SETUP_CHECKPOINT(6, "usermodehelper_enable");
 	usermodehelper_enable();
-	pr_emerg("DIAG: setup do_initcalls\n");
 	DIAG_SETUP_STATUS("do_initcalls");
 	DIAG_SETUP_CHECKPOINT(7, "do_initcalls");
 	do_initcalls();
@@ -1119,7 +1114,8 @@ static int __ref kernel_init(void *unused)
 	 */
 	panic("DIAG: kernel init complete, about to exec init");
 #endif
-	pr_emerg("run init\n");
+	DIAG_PROGRESS("kernel: starting %s",
+		      ramdisk_execute_command ? ramdisk_execute_command : "init");
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -1192,6 +1188,7 @@ static noinline void __init kernel_init_freeable(void)
 	do_basic_setup();
 	DIAG_STAGE_8;
 	DIAG_BOOTBAR_FULL;
+	DIAG_PROGRESS("kernel: drivers initialized");
 	DIAG_ARM_HOOK(8);
 	DIAG_SMC_HOOK(8);
 	DIAG_PAINT_HOOK(8);

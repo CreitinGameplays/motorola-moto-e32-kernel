@@ -43,19 +43,73 @@ void diag_stage_mirror(const char *text, size_t len)
 #endif
 
 /*
- * Panel log console: the diag text engine as a printk console driver.
- * Registered at the end of setup_arch() with CON_PRINTBUFFER, which
- * replays the whole log buffer through the painter first, then carries
- * every later printk live.  Not CON_BOOT, so nothing ever unregisters
- * it: the panel log stays for the whole boot.  (Named diag_fb_console:
+ * Panel progress console: the diag text engine as a printk console driver,
+ * but only for explicitly marked boot-progress lines.
+ *
+ * The full-log variant (CON_PRINTBUFFER plus every live printk) was a debug
+ * channel: every message painted 40-90 glyphs, and each glyph used to flush
+ * the whole text band.  On a production boot that is pure overhead, so the
+ * .write callback now assembles records and paints only lines that carry
+ * DIAG_PROGRESS_TAG ("diag: "); everything else is dropped before the
+ * painter.  CON_PRINTBUFFER is kept so the progress lines printed before
+ * registration (setup_arch's early milestones) still appear on the replay.
+ * Not CON_BOOT, so nothing ever unregisters it.  (Named diag_fb_console:
  * struct diag_console is already taken by the old DIAG_SCREEN state.)
  */
 struct diag_txt_state diag_txt_state;
 
+#define DIAG_CON_LINE_MAX	512
+static char diag_con_line[DIAG_CON_LINE_MAX];
+static unsigned int diag_con_len;
+static bool diag_con_skip;
+
+/*
+ * Paint an assembled console line if it carries the progress tag.
+ * The tag is searched anywhere in the line: printk prepends the
+ * "[time] [cpu] " prefix to every console record (PRINTK_TIME/CPUID are
+ * on in this config), so the record does not start with the tag.  The
+ * painted text starts right after the tag, dropping both prefixes.
+ */
+static void diag_con_flush(void)
+{
+	char *p;
+
+	if (diag_con_len) {
+		diag_con_line[diag_con_len] = '\0';
+		p = strstr(diag_con_line, DIAG_PROGRESS_TAG);
+		if (p) {
+			p += sizeof(DIAG_PROGRESS_TAG) - 1;
+			diag_txt_puts(p, strlen(p));
+			diag_txt_newline();
+		}
+	}
+	diag_con_len = 0;
+}
+
 static void diag_fbcon_write(struct console *con, const char *s,
 			     unsigned int n)
 {
-	diag_txt_puts(s, n);
+	while (n--) {
+		char c = *s++;
+
+		if (c == '\n') {
+			if (!diag_con_skip)
+				diag_con_flush();
+			diag_con_skip = false;
+			diag_con_len = 0;
+			continue;
+		}
+		if (diag_con_skip || c == '\r')
+			continue;
+		if (diag_con_len >= sizeof(diag_con_line) - 1) {
+			/* overlong record: progress lines are short, so
+			 * this is ordinary log spam - drop it entirely */
+			diag_con_skip = true;
+			diag_con_len = 0;
+			continue;
+		}
+		diag_con_line[diag_con_len++] = c;
+	}
 }
 
 static struct console diag_fb_console = {
@@ -360,10 +414,11 @@ void __init setup_arch(char **cmdline_p)
 	DIAG_TRACE_HOOK(18, 0);
 	smp_build_mpidr_hash();
 
-	/* the panel log console: CON_PRINTBUFFER replays everything
-	 * printed so far, then every printk lands on the panel */
+	/* the panel console: CON_PRINTBUFFER replays the progress lines
+	 * printed so far, then each new progress line paints live */
 	diag_txt_init();
 	register_console(&diag_fb_console);
+	DIAG_PROGRESS("kernel: setup_arch done");
 	DIAG_TRACE_HOOK(19, 0);
 
 	/* Init percpu seeds for random tags after cpus are set up. */
