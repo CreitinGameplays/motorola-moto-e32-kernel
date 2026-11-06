@@ -441,10 +441,15 @@ void diag_stage_mirror(const char *text, size_t len);
  * the whole kernel log (which also made every driver message pay a glyph
  * paint plus cache maintenance).  Call sites stay in the boot core:
  * setup_arch, mm_init, the initcall phases and exec of /init.
+ *
+ * Level 0 (EMERG) on purpose: this bootloader passes loglevel=1, so
+ * anything above KERN_EMERG is suppressed before it can reach a console
+ * (measured on the quiet daily driver: KERN_INFO progress lines existed
+ * in the ring but never painted).
  */
 #define DIAG_PROGRESS_TAG "diag: "
 #define DIAG_PROGRESS(fmt, ...) \
-	printk(KERN_INFO DIAG_PROGRESS_TAG fmt "\n", ##__VA_ARGS__)
+	printk(KERN_EMERG DIAG_PROGRESS_TAG fmt "\n", ##__VA_ARGS__)
 
 
 #define DIAG_PANIC_STAGE 0
