@@ -7,6 +7,7 @@
 
 #include <linux/mfd/syscon.h>
 #include <linux/diag_stage.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -62,6 +63,87 @@ struct sprd_hsphy {
 	const struct sprd_hsphy_data *data;
 };
 
+/*
+ * Power up the phy's 3.3 V supply (vddusb33) in the PMIC.  The vendor
+ * phy driver does this through the PMIC regmap in its charger-detect
+ * path (4.14 phy-sprd-qogirl6.c: reg 0x19e8 bit0=0 = power UP, plus
+ * reg 0x1ba0 bit0=1 routing CHGR_DET_FGU_CTRL to the usb phy with the
+ * bc1.2 detector disabled); this port has no PMIC regmap driver, so do
+ * the same with raw ADI accesses (protocol per 7.1 init/main.c
+ * hawaii_pmic_raw_reset: read = reg addr to +0x28, data at +0x2c with
+ * BIT(31) busy; write = FIFO-full check at +0x30, value to the
+ * +0x20000 window).
+ */
+#define H71_ADI_BASE		0x64200000UL
+#define H71_PMIC_VDD_USB33	0x19e8
+#define H71_PMIC_CHGR_DET	0x1ba0
+
+static int h71_pmic_read(void __iomem *adi, u32 reg)
+{
+	u32 val, timeout = 2000000;
+
+	writel_relaxed(reg, adi + 0x28);
+	while (--timeout) {
+		val = readl_relaxed(adi + 0x2c);
+		if (!(val & BIT(31)))
+			return val & 0xffff;
+		cpu_relax();
+	}
+	return -ETIMEDOUT;
+}
+
+static int h71_pmic_write(void __iomem *adi, u32 reg, u32 val)
+{
+	u32 timeout = 2000000;
+
+	while (readl_relaxed(adi + 0x30) & BIT(11)) {
+		if (!--timeout)
+			return -ETIMEDOUT;
+		cpu_relax();
+	}
+	writel_relaxed(val & 0xffff, adi + 0x20000 + reg);
+	return 0;
+}
+
+static void sprd_hsphy_usb33_on(struct sprd_hsphy *hsphy)
+{
+	static void __iomem *adi;
+	int v, i;
+
+	if (!adi) {
+		adi = ioremap(H71_ADI_BASE, 0x40000);
+		if (!adi) {
+			dev_err(hsphy->dev, "usb33: ADI ioremap failed\n");
+			return;
+		}
+	}
+
+	v = h71_pmic_read(adi, H71_PMIC_VDD_USB33);
+	dev_info(hsphy->dev, "usb33: vddusb33 was 0x%x\n", v);
+	if (v >= 0 && (v & BIT(0))) {
+		h71_pmic_write(adi, H71_PMIC_VDD_USB33, v & ~BIT(0));
+		dev_info(hsphy->dev, "usb33: vddusb33 powered up\n");
+	} else if (v >= 0) {
+		dev_info(hsphy->dev, "usb33: vddusb33 already up\n");
+	}
+
+	/* route the charger-detect control to the usb phy, bc1.2 off,
+	 * and wait for the PMIC to latch it (vendor polls 5x1ms) */
+	v = h71_pmic_read(adi, H71_PMIC_CHGR_DET);
+	dev_info(hsphy->dev, "usb33: chgr_det was 0x%x\n", v);
+	if (v >= 0 && !(v & BIT(0))) {
+		h71_pmic_write(adi, H71_PMIC_CHGR_DET, v | BIT(0));
+		for (i = 0; i < 5; i++) {
+			usleep_range(1000, 1100);
+			v = h71_pmic_read(adi, H71_PMIC_CHGR_DET);
+			if (v > 0 && (v & BIT(0)))
+				break;
+			h71_pmic_write(adi, H71_PMIC_CHGR_DET, v | BIT(0));
+		}
+		dev_info(hsphy->dev, "usb33: chgr_det now 0x%x\n", v);
+	}
+}
+
 static int sprd_hsphy_init(struct phy *phy)
 {
 	struct sprd_hsphy *hsphy = phy_get_drvdata(phy);
@@ -93,6 +175,8 @@ static int sprd_hsphy_power_on(struct phy *phy)
 	 * (docs/23-7.1-flash-bringup.md, tests 51-52) */
 	regmap_set_bits(hsphy->aon_apb, hsphy->data->cgm_ref_reg,
 			hsphy->data->cgm_ref_mask);
+
+	sprd_hsphy_usb33_on(hsphy);
 
 	regmap_clear_bits(hsphy->ana_regs, hsphy->data->pll_reg,
 			  BIT_ANLG_USB20_ISO_SW_EN);
