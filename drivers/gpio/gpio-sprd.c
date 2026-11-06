@@ -263,6 +263,7 @@ static int sprd_gpio_probe(struct platform_device *pdev)
 
 static const struct of_device_id sprd_gpio_of_match[] = {
 	{ .compatible = "sprd,sc9860-gpio", },
+	{ .compatible = "sprd,qogirl6-gpio", },	/* vendor DTB gpio@641b0000 */
 	{ /* end of list */ }
 };
 MODULE_DEVICE_TABLE(of, sprd_gpio_of_match);

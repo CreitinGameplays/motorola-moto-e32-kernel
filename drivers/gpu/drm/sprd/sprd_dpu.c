@@ -863,6 +863,7 @@ static const struct component_ops dpu_component_ops = {
 
 static const struct of_device_id dpu_match_table[] = {
 	{ .compatible = "sprd,sharkl3-dpu" },
+	{ .compatible = "sprd,display-processor" },	/* vendor DTB dpu@31000000 */
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, dpu_match_table);

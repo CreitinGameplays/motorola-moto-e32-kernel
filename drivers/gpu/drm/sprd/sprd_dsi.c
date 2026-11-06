@@ -1091,6 +1091,7 @@ static const struct dphy_pll_platform dphy_pll_ums9230 = {
 static const struct of_device_id dsi_match_table[] = {
 	{ .compatible = "sprd,sharkl3-dsi-host", .data = &dphy_pll_sharkl3 },
 	{ .compatible = "sprd,ums9230-dsi-host", .data = &dphy_pll_ums9230 },
+	{ .compatible = "sprd,dsi-host", .data = &dphy_pll_ums9230 },	/* vendor DTB dsi@31100000 */
 	{ /* sentinel */ },
 };
 
