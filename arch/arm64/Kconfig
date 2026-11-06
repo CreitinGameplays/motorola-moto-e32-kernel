@@ -1325,3 +1325,17 @@ config HAWAII_KEXEC_TEST
 	  Test-only: at the very start of the kernel, write a marker into
 	  the pstore ramoops console ring and issue a PSCI SYSTEM_RESET.
 	  Leave off for normal builds.
+
+config DIAGFB_FULL_LOG
+	bool "Panel console: full kernel log until userspace (debug)"
+	default n
+	help
+	  The diagfb panel console paints only progress lines and crash
+	  signatures by default (mode 0).  Say y to start in mode 1: the
+	  full kernel log on the panel until /init execs, then it reverts
+	  to progress-only automatically - a full log painted past the
+	  init exec has to scroll ~4 MB of framebuffer per line under
+	  userspace log spam and can stall the console lock until the
+	  system dies.  Runtime switch: /proc/diagfb_log (0 = progress
+	  only, 1 = full until init, 2 = full with no auto-quiet, debug
+	  only).

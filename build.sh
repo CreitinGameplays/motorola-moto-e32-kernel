@@ -18,6 +18,10 @@
 #   OUT        build directory (default: /tmp/kbuild; note that /tmp is
 #              RAM-backed on many hosts and wiped on reboot)
 #   STABLE     output directory that survives reboots (default: ~/kernel-out)
+#   CLEAN      1 = wipe OUT first and build from scratch (default: 0,
+#              incremental: OUT is reused, the .config is regenerated
+#              from $CONFIG + the tweaks and installed only when it
+#              differs, so config drift cannot leak into a build)
 #
 # The finished build copies the boot-critical set - Image, mali_kbase.ko,
 # sprdwl_ng.ko, sprdbt_tty.ko, Module.symvers, kernel.config and a
@@ -40,11 +44,27 @@ fi
 
 OUT="${OUT:-/tmp/kbuild}"
 STABLE="${STABLE:-$HOME/kernel-out}"
-rm -rf "$OUT"
-mkdir -p "$OUT"
-cp "$CONFIG" "$OUT/.config"
 
-S="scripts/config --file $OUT/.config"
+# Incremental by default: $OUT is REUSED when it exists, so a code-only
+# change relinks instead of rebuilding the world (~7 min -> ~1 min).
+# The .config is always regenerated from $CONFIG + the tweaks below in
+# a scratch tree and installed into $OUT only when it differs - a
+# config change then rebuilds exactly the affected objects (kbuild
+# handles that itself), and a stale $OUT/.config (hand-edited, or a
+# from-scratch olddefconfig run against the wrong base) can never leak
+# into a build.  Set CLEAN=1 to wipe $OUT first and build from scratch.
+CLEAN="${CLEAN:-0}"
+if [ "$CLEAN" = "1" ]; then
+    echo "--- CLEAN=1: wiping $OUT (from-scratch build)"
+    rm -rf "$OUT"
+fi
+mkdir -p "$OUT"
+
+TMPCFG="$(mktemp -d)"
+trap 'rm -rf "$TMPCFG"' EXIT
+cp "$CONFIG" "$TMPCFG/.config"
+
+S="scripts/config --file $TMPCFG/.config"
 # bootability: no LTO, no CFI
 $S --disable LTO --disable LTO_CLANG --enable LTO_NONE \
    --disable CFI --disable CFI_CLANG --disable CFI_CLANG_SHADOW
@@ -67,7 +87,19 @@ $S --enable KEXEC
 
 M="make O=$OUT ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang \
    LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm OBJDUMP=llvm-objdump"
-$M olddefconfig
+
+# resolve the desired config in the scratch tree, then swap it in only
+# when it differs from what $OUT was built with
+make O=$TMPCFG ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang \
+     LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm OBJDUMP=llvm-objdump \
+     olddefconfig
+if [ ! -f "$OUT/.config" ] || ! cmp -s "$TMPCFG/.config" "$OUT/.config"; then
+    echo "--- config changed (or first build): installing the new .config"
+    cp "$TMPCFG/.config" "$OUT/.config"
+else
+    echo "--- config unchanged: incremental build in $OUT"
+fi
+
 echo "--- kernelrelease with LOCALVERSION:"
 $M -s kernelrelease LOCALVERSION="+-ab612c2"
 echo "--- building"

@@ -1116,6 +1116,10 @@ static int __ref kernel_init(void *unused)
 #endif
 	DIAG_PROGRESS("kernel: starting %s",
 		      ramdisk_execute_command ? ramdisk_execute_command : "init");
+	/* the panic guard: from here on, mode 1 no longer paints the full
+	 * log - userspace log volume plus the per-line ~4 MB scroll would
+	 * stall the console lock */
+	diag_panel_boot_done = true;
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)

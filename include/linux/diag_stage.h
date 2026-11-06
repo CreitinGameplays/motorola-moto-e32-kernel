@@ -451,6 +451,34 @@ void diag_stage_mirror(const char *text, size_t len);
 #define DIAG_PROGRESS(fmt, ...) \
 	printk(KERN_EMERG DIAG_PROGRESS_TAG fmt "\n", ##__VA_ARGS__)
 
+/*
+ * Panel log policy (runtime-switchable): int diag_panel_log_mode,
+ * defined in arch/arm64/kernel/setup.c next to the console:
+ *   0 = progress only (default): progress lines + crash signatures
+ *   1 = full kernel log until userspace starts, then back to mode 0
+ *   2 = full kernel log, no auto-quiet (explicit debug override)
+ *
+ * diag_panel_boot_done is set when /init is about to exec - the panic
+ * guard: a full log painted past the init exec has to scroll ~4 MB of
+ * framebuffer per line under userspace log spam, stalling the console
+ * lock (and with it every printk) until the system dies.  Runtime
+ * switch: /proc/diagfb_log (root, created by a late initcall).
+ */
+extern int diag_panel_log_mode;
+extern bool diag_panel_boot_done;
+
+/* one line-assembly state per painting path (the console .write is
+ * serialized by the printk core) */
+struct diag_panel_line {
+	char buf[512];
+	unsigned int len;
+	bool skip;
+};
+
+/* filter + paint a raw chunk of log text (records may be split across
+ * calls); implemented once in setup.c */
+void diag_panel_write(struct diag_panel_line *st, const char *s, size_t n);
+
 
 #define DIAG_PANIC_STAGE 0
 #define DIAG_ARM_STAGE 0

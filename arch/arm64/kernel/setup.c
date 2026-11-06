@@ -30,6 +30,10 @@
 #include <linux/bootmem.h>
 #include <linux/screen_info.h>
 #include <linux/init.h>
+#include <linux/string.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
 #include <linux/diag_stage.h>
 
 #if DIAG_SCREEN
@@ -43,73 +47,102 @@ void diag_stage_mirror(const char *text, size_t len)
 #endif
 
 /*
- * Panel progress console: the diag text engine as a printk console driver,
- * but only for explicitly marked boot-progress lines.
- *
- * The full-log variant (CON_PRINTBUFFER plus every live printk) was a debug
- * channel: every message painted 40-90 glyphs, and each glyph used to flush
- * the whole text band.  On a production boot that is pure overhead, so the
- * .write callback now assembles records and paints only lines that carry
- * DIAG_PROGRESS_TAG ("diag: "); everything else is dropped before the
- * painter.  CON_PRINTBUFFER is kept so the progress lines printed before
- * registration (setup_arch's early milestones) still appear on the replay.
- * Not CON_BOOT, so nothing ever unregisters it.  (Named diag_fb_console:
- * struct diag_console is already taken by the old DIAG_SCREEN state.)
+ * Panel progress console: the diag text engine as a printk console
+ * driver, painting what the panel log policy lets through.  The
+ * full-log variant (CON_PRINTBUFFER plus every live printk) was a debug
+ * channel: every message painted 40-90 glyphs, and each glyph used to
+ * flush the whole text band.  On a production boot that is pure
+ * overhead - and past the init exec the same traffic scrolls ~4 MB of
+ * framebuffer per line under userspace log spam, stalling the console
+ * lock until the system dies, which is why mode 1 auto-reverts to
+ * progress-only when /init execs.  CON_PRINTBUFFER is kept so the
+ * progress lines printed before registration still appear on the
+ * replay.  Not CON_BOOT, so nothing ever unregisters it.  (Named
+ * diag_fb_console: struct diag_console is already taken by the old
+ * DIAG_SCREEN state.)
  */
 struct diag_txt_state diag_txt_state;
 
-#define DIAG_CON_LINE_MAX	512
-static char diag_con_line[DIAG_CON_LINE_MAX];
-static unsigned int diag_con_len;
-static bool diag_con_skip;
+int diag_panel_log_mode = IS_ENABLED(CONFIG_DIAGFB_FULL_LOG) ? 1 : 0;
+bool diag_panel_boot_done;
 
-/*
- * Paint an assembled console line if it carries the progress tag.
- * The tag is searched anywhere in the line: printk prepends the
- * "[time] [cpu] " prefix to every console record (PRINTK_TIME/CPUID are
- * on in this config), so the record does not start with the tag.  The
- * painted text starts right after the tag, dropping both prefixes.
- */
-static void diag_con_flush(void)
+/* the console .write path's line state (printk-serialized) */
+static struct diag_panel_line diag_console_line;
+
+/* mode 2 ignores boot_done; mode 1 auto-reverts to progress-only once
+ * /init is about to exec (the panic guard) */
+static bool diag_panel_full_log(void)
 {
-	char *p;
-
-	if (diag_con_len) {
-		diag_con_line[diag_con_len] = '\0';
-		p = strstr(diag_con_line, DIAG_PROGRESS_TAG);
-		if (p) {
-			p += sizeof(DIAG_PROGRESS_TAG) - 1;
-			diag_txt_puts(p, strlen(p));
-			diag_txt_newline();
-		}
-	}
-	diag_con_len = 0;
+	if (diag_panel_log_mode == 2)
+		return true;
+	return diag_panel_log_mode == 1 && !diag_panel_boot_done;
 }
 
-static void diag_fbcon_write(struct console *con, const char *s,
-			     unsigned int n)
+/* lines painted in EVERY mode: progress marks and crash signatures
+ * (a panic must still be visible when quiet) */
+static bool diag_line_always(const char *line)
+{
+	return strstr(line, DIAG_PROGRESS_TAG) ||
+	       strstr(line, "Kernel panic") ||
+	       strstr(line, "Internal error") ||
+	       strstr(line, "Asynchronous SError") ||
+	       strstr(line, "Unable to handle") ||
+	       strstr(line, "Call trace") ||
+	       strstr(line, "BUG:") ||
+	       strstr(line, "WARNING:");
+}
+
+/*
+ * Paint one assembled line.  A progress line is painted from its tag
+ * on, dropping the "[time] [cpu] " printk prefix (PRINTK_TIME/CPUID are
+ * on in this config, so the record does not start with the tag); any
+ * other line (crash signatures, full mode) is painted whole.
+ */
+static void diag_paint_line(const char *line)
+{
+	const char *p = strstr(line, DIAG_PROGRESS_TAG);
+
+	if (p)
+		p += sizeof(DIAG_PROGRESS_TAG) - 1;
+	else
+		p = line;
+	diag_txt_puts(p, strlen(p));
+	diag_txt_newline();
+}
+
+void diag_panel_write(struct diag_panel_line *st, const char *s, size_t n)
 {
 	while (n--) {
 		char c = *s++;
 
 		if (c == '\n') {
-			if (!diag_con_skip)
-				diag_con_flush();
-			diag_con_skip = false;
-			diag_con_len = 0;
+			if (!st->skip && st->len) {
+				st->buf[st->len] = '\0';
+				if (diag_panel_full_log() ||
+				    diag_line_always(st->buf))
+					diag_paint_line(st->buf);
+			}
+			st->skip = false;
+			st->len = 0;
 			continue;
 		}
-		if (diag_con_skip || c == '\r')
+		if (st->skip || c == '\r')
 			continue;
-		if (diag_con_len >= sizeof(diag_con_line) - 1) {
+		if (st->len >= sizeof(st->buf) - 2) {
 			/* overlong record: progress lines are short, so
 			 * this is ordinary log spam - drop it entirely */
-			diag_con_skip = true;
-			diag_con_len = 0;
+			st->skip = true;
+			st->len = 0;
 			continue;
 		}
-		diag_con_line[diag_con_len++] = c;
+		st->buf[st->len++] = c;
 	}
+}
+
+static void diag_fbcon_write(struct console *con, const char *s,
+			     unsigned int n)
+{
+	diag_panel_write(&diag_console_line, s, n);
 }
 
 static struct console diag_fb_console = {
@@ -118,6 +151,62 @@ static struct console diag_fb_console = {
 	.flags	= CON_PRINTBUFFER | CON_ENABLED,
 	.index	= -1,
 };
+
+/*
+ * /proc/diagfb_log - runtime switch for the panel log policy:
+ *   echo 0 > /proc/diagfb_log   progress only + crash signatures (default)
+ *   echo 1 > /proc/diagfb_log   full log until /init, then auto-quiet
+ *   echo 2 > /proc/diagfb_log   full log, no auto-quiet (debug override)
+ * Read shows "<mode> <boot_done>".  Mode 2 is the only way to keep the
+ * full log past the init exec - it can stall the console lock, use it
+ * for debugging only.
+ */
+static int diagfb_log_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d %d\n", diag_panel_log_mode,
+		   diag_panel_boot_done ? 1 : 0);
+	return 0;
+}
+
+static int diagfb_log_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, diagfb_log_show, NULL);
+}
+
+static ssize_t diagfb_log_write(struct file *file, const char __user *buf,
+				size_t count, loff_t *ppos)
+{
+	char tmp[16];
+	int mode;
+
+	if (count >= sizeof(tmp))
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+	tmp[count] = '\0';
+	if (kstrtoint(strim(tmp), 0, &mode) || mode < 0 || mode > 2)
+		return -EINVAL;
+	diag_panel_log_mode = mode;
+	pr_info("diagfb: panel log mode %d (0=progress 1=full-until-init 2=full)\n",
+		mode);
+	return count;
+}
+
+static const struct file_operations diagfb_log_ops = {
+	.owner		= THIS_MODULE,
+	.open		= diagfb_log_open,
+	.read		= seq_read,
+	.write		= diagfb_log_write,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static int __init diagfb_log_init(void)
+{
+	proc_create("diagfb_log", 0644, NULL, &diagfb_log_ops);
+	return 0;
+}
+late_initcall(diagfb_log_init);
 
 #include <linux/kexec.h>
 #include <linux/root_dev.h>
