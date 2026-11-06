@@ -42,6 +42,8 @@ struct sprd_hsphy_data {
 	/* AON APB regs */
 	u32 otg_test_reg;
 	u32 otg_ctrl_reg;
+	u32 cgm_ref_reg;
+	u32 cgm_ref_mask;
 
 	/* analog regs */
 	u32 pll_reg;
@@ -82,6 +84,15 @@ static int sprd_hsphy_power_on(struct phy *phy)
 	struct sprd_hsphy *hsphy = phy_get_drvdata(phy);
 
 	dev_dbg(hsphy->dev, "%s()\n", __func__);
+
+	/* enable the phy reference clock first: the vendor driver
+	 * (4.14 phy-sprd-qogirl6.c) sets CGM_REG1's OTG_REF_EN +
+	 * DPHY_REF_EN before anything else - without the ref clock
+	 * every APB register write still lands but the RF domain is
+	 * electrically mute and the host sees nothing at all
+	 * (docs/23-7.1-flash-bringup.md, tests 51-52) */
+	regmap_set_bits(hsphy->aon_apb, hsphy->data->cgm_ref_reg,
+			hsphy->data->cgm_ref_mask);
 
 	regmap_clear_bits(hsphy->ana_regs, hsphy->data->pll_reg,
 			  BIT_ANLG_USB20_ISO_SW_EN);
@@ -238,6 +249,10 @@ static const struct sprd_hsphy_data ums9230_data = {
 	/* AON APB regs */
 	.otg_test_reg		= 0x0204,
 	.otg_ctrl_reg		= 0x0208,
+	/* AON_APB_CGM_REG1: OTG_REF_EN | DPHY_REF_EN
+	 * (4.14 include/dt-bindings/soc/sprd,qogirn6pro-*.h) */
+	.cgm_ref_reg		= 0x0138,
+	.cgm_ref_mask		= 0x1000 | 0x0400,
 
 	/* analog g2 regs */
 	.pll_reg		= 0x001c,
