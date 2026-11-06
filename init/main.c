@@ -1738,7 +1738,7 @@ static struct timer_list hawaii_hb_timer;
 static unsigned long hawaii_hb_ticks;
 /* absolute jiffies at which an unprogressing boot is reset */
 static unsigned long hawaii_deadline;
-static int hawaii_selfreset = 150;
+static int hawaii_selfreset;			/* off: logsave parks, HW WDT covers freezes */
 static int hawaii_wdt_timeout = 180;
 static void __iomem *hawaii_wdt_base;
 static void __iomem *hawaii_aon_base;	/* the AON APB syscon @0x64000000 */
