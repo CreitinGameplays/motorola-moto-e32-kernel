@@ -358,31 +358,49 @@ static const struct of_device_id sprd_musb_match[] = {
 /*
  * Bring-up shim for the vendor DTB: its usb@64900000 node carries the
  * pre-standard "usb-phy" phandle instead of "phys" (same provider,
- * #phy-cells = 0). Copy the phandle over before any device probing so
- * devm_of_phy_get_by_index() in the probe path finds it.
+ * #phy-cells = 0).  Normalize the node before any device probing so
+ * devm_of_phy_get_by_index() finds it.
+ *
+ * Always REPLACE whatever "phys" is there: the LK dtbo merge can add
+ * one with a byte-swangled phandle (7.1 boot: kernel says "could not
+ * find phandle 0x78000000" for /soc/aon/usb@64900000 while the hsphy's
+ * phandle is 0x78), and of_property_read_u32() + kmemdup() copying is
+ * endian-broken anyway.  The phy is resolved by COMPATIBLE and its own
+ * phandle property is copied verbatim - raw DT bytes, no conversions.
  */
 static int __init sprd_musb_dt_shim(void)
 {
-	struct device_node *np;
+	struct device_node *np, *phy;
 
 	for_each_compatible_node(np, NULL, "sprd,qogirl6-musb") {
-		struct property *prop;
-		u32 ph;
+		struct property *prop, *old;
+		const __be32 *ph;
+		int len;
 
-		if (of_property_present(np, "phys"))
-			continue;
-		if (of_property_read_u32(np, "usb-phy", &ph))
-			continue;
+		phy = of_find_compatible_node(NULL, NULL, "sprd,qogirl6-phy");
+		if (!phy)
+			break;
+		ph = of_get_property(phy, "phandle", &len);
+		if (!ph || len != 4) {
+			of_node_put(phy);
+			break;
+		}
+		old = of_find_property(np, "phys", NULL);
+		if (old)
+			of_remove_property(np, old);
 		prop = kzalloc(sizeof(*prop), GFP_KERNEL);
-		if (!prop)
-			continue;
+		if (!prop) {
+			of_node_put(phy);
+			break;
+		}
 		prop->name = "phys";
-		prop->length = sizeof(ph);
-		prop->value = kmemdup(&ph, sizeof(ph), GFP_KERNEL);
+		prop->length = 4;
+		prop->value = kmemdup(ph, 4, GFP_KERNEL);
 		if (!prop->value || of_add_property(np, prop)) {
 			kfree(prop->value);
 			kfree(prop);
 		}
+		of_node_put(phy);
 	}
 	return 0;
 }
