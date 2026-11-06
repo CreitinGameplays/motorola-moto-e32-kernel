@@ -635,11 +635,59 @@ static void sprd_crtc_mode_set_nofb(struct drm_crtc *crtc)
 	sprd_dpi_init(dpu);
 }
 
+/*
+ * DPU clock programming, ported from the vendor qogirl6/global_dpu.c:
+ * the core clock gets its highest source (384 MHz) as parent, and the
+ * DPI pixel clock gets the first source divisible by the mode's pixel
+ * clock as parent with its rate set to the pixel clock.  Without this
+ * the DPI interface has no pixel clock: the DPU runs its registers but
+ * produces no vsync and no scanout (test 60: module clocks enabled,
+ * DPU IRQ count still 0, wait_for_vblanks timed out in every commit).
+ */
+static void sprd_dpu_clk_program(struct sprd_dpu *dpu)
+{
+	struct dpu_context *ctx = &dpu->ctx;
+	static const unsigned long src_hz[9] = {
+		96000000, 128000000, 153600000, 192000000,
+		250000000, 256000000, 307200000, 333300000, 384000000,
+	};
+	struct clk *src;
+	int i;
+
+	if (ctx->core_clk && ctx->src_clk[8])
+		clk_set_parent(ctx->core_clk, ctx->src_clk[8]);
+
+	if (!ctx->dpi_clk)
+		return;
+	src = NULL;
+	for (i = 0; i < 4; i++) {
+		if (ctx->src_clk[i] &&
+		    (src_hz[i] % ctx->vm.pixelclock) == 0) {
+			src = ctx->src_clk[i];
+			break;
+		}
+	}
+	if (!src) {
+		DRM_ERROR("no dpi clock source divisible by %lu Hz\n",
+			  ctx->vm.pixelclock);
+		src = ctx->src_clk[0];
+	}
+	if (src)
+		clk_set_parent(ctx->dpi_clk, src);
+	if (clk_set_rate(ctx->dpi_clk, ctx->vm.pixelclock))
+		DRM_ERROR("failed to set dpi clock rate %lu\n",
+			  ctx->vm.pixelclock);
+	DRM_INFO("dpi clock: %lu Hz parent %lu Hz\n",
+		 clk_get_rate(ctx->dpi_clk),
+		 src ? clk_get_rate(src) : 0);
+}
+
 static void sprd_crtc_atomic_enable(struct drm_crtc *crtc,
 				    struct drm_atomic_state *state)
 {
 	struct sprd_dpu *dpu = to_sprd_crtc(crtc);
 
+	sprd_dpu_clk_program(dpu);
 	sprd_dpu_init(dpu);
 
 	drm_crtc_vblank_on(&dpu->base);
@@ -801,7 +849,8 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 	 * clock this DTB does not have, so the display module clocks were
 	 * never enabled and the panel stayed dark (test 59: DPHY PLL locked
 	 * only on leftover bootloader clocks, no scanout).  Enable them all,
-	 * like the vendor dpu clock ops does. */
+	 * like the vendor dpu clock ops does, and keep the two the vendor
+	 * reprograms (core + dpi) for the parent/rate setup below. */
 	for (int i = 0; ; i++) {
 		struct clk *clk = of_clk_get(dev->of_node, i);
 
@@ -813,6 +862,24 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 			dev_dbg(dev, "clock #%d enabled\n", i);
 	}
 	ctx->clk = NULL;
+
+	/* the clocks the vendor reprograms per mode (qogirl6/global_dpu.c):
+	 * core gets its 384 MHz parent, dpi gets a divisible source + the
+	 * pixel-clock rate */
+	ctx->core_clk = devm_clk_get_optional(dev, "clk_dpu_core");
+	ctx->dpi_clk = devm_clk_get_optional(dev, "clk_dpu_dpi");
+	{
+		static const char * const src_names[] = {
+			"clk_src_96m", "clk_src_128m", "clk_src_153m6",
+			"clk_src_192m", "clk_src_250m", "clk_src_256m",
+			"clk_src_307m2", "clk_src_333m3", "clk_src_384m",
+		};
+		int i;
+
+		for (i = 0; i < ARRAY_SIZE(ctx->src_clk); i++)
+			ctx->src_clk[i] = devm_clk_get_optional(dev,
+								src_names[i]);
+	}
 
 	/* disable and clear interrupts before register dpu IRQ. */
 	writel(0x00, ctx->base + REG_DPU_INT_EN);
