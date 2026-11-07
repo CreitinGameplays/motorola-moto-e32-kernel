@@ -291,6 +291,18 @@ config DM_UNSTRIPED
 	  Unstripes I/O so it is issued solely on a single drive in a HW
 	  RAID0 or dm-striped target.
 
+config DM_DEFAULT_KEY
+	tristate "Default key target"
+	depends on BLK_DEV_DM
+	depends on BLK_INLINE_ENCRYPTION
+	help
+	  Device-mapper target for metadata encryption of a filesystem
+	  with a single "default" key - what Android vold/fs_mgr creates
+	  for /data when the fstab has keydirectory= (hawaii: the key is
+	  /metadata/vold/metadata_encryption/key, cipher aes-xts-plain64).
+	  Ported from the android-4.14 vendor tree to the 7.1 blk-crypto
+	  API.
+
 config DM_CRYPT
 	tristate "Crypt target support"
 	depends on BLK_DEV_DM
