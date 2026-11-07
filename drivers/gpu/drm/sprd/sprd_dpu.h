@@ -42,6 +42,8 @@ enum {
  * @evt_update: wait queue condition for DPU shadow register
  * @evt_stop: wait queue condition for DPU stop register
  */
+struct regmap;
+
 struct dpu_context {
 	void __iomem *base;
 	struct clk *clk;
@@ -55,7 +57,14 @@ struct dpu_context {
 	wait_queue_head_t wait_queue;
 	bool evt_update;
 	bool evt_stop;
+	struct regmap *rst_regmap;	/* AP_AHB "disp_reset" syscon */
+	u32 rst_reg;
+	u32 rst_mask;
 };
+
+/* parsed from the panel node (sprd_panel.c), 0 = plain divider mode */
+extern unsigned int sprd_panel_dpi_clk_div;
+
 
 /**
  * Sprd DPU device structure

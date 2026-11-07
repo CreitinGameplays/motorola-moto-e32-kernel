@@ -28,6 +28,15 @@
 #include <video/mipi_display.h>
 
 #define SPRD_MIPI_DSI_FMT_DSC	0xff
+
+/*
+ * "sprd,dpi-clk-div" from the selected LCD node: 6 means the vendor
+ * div6 scheme (DPI mux 6 = dphy-333m3, divider bypassed), 8 means
+ * div8, 0 means the DPI clock is set to the pixel clock directly.
+ * sprd_dpu.c reads this when it programs the DPI clock.
+ */
+unsigned int sprd_panel_dpi_clk_div;
+EXPORT_SYMBOL_GPL(sprd_panel_dpi_clk_div);
 #define SPRD_GPIO_SEQ_MAX	16
 
 enum {
@@ -361,6 +370,10 @@ static int sprd_panel_parse_lcd(struct device_node *lcd_node,
 	info->bit_clk_khz = 500000;
 	of_property_read_u32(lcd_node, "sprd,phy-bit-clock",
 			     &info->bit_clk_khz);
+	sprd_panel_dpi_clk_div = 0;
+	of_property_read_u32(lcd_node, "sprd,dpi-clk-div",
+			     &sprd_panel_dpi_clk_div);
+
 	info->esc_clk_khz = 20000;
 	of_property_read_u32(lcd_node, "sprd,phy-escape-clock",
 			     &info->esc_clk_khz);

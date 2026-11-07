@@ -8,6 +8,8 @@
 #include <linux/delay.h>
 #include <linux/dma-buf.h>
 #include <linux/io.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
@@ -659,8 +661,29 @@ static void sprd_dpu_clk_program(struct sprd_dpu *dpu)
 
 	if (!ctx->dpi_clk)
 		return;
+
+	/*
+	 * Panels with "sprd,dpi-clk-div" (this one: 6) use the vendor
+	 * div_to_clk() scheme: DPI mux 6 = dphy-333m3 with the divider
+	 * bypassed.  No PLL source is an integer multiple of the
+	 * 140.666 MHz pixel clock, so the old clk_set_rate() attempt
+	 * always fell back to 96 MHz and the DPI timing never matched
+	 * the DSI video timing (test 61).
+	 */
+	if (sprd_panel_dpi_clk_div) {
+		if (ctx->src_clk[7] &&
+		    !clk_set_parent(ctx->dpi_clk, ctx->src_clk[7])) {
+			clk_set_rate(ctx->dpi_clk,
+				     clk_get_rate(ctx->src_clk[7]));
+			DRM_INFO("dpi clock: dphy-333m3, dpi-clk-div %u\n",
+				 sprd_panel_dpi_clk_div);
+			return;
+		}
+		DRM_ERROR("cannot select dphy-333m3 for the dpi clock\n");
+	}
+
 	src = NULL;
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < ARRAY_SIZE(ctx->src_clk); i++) {
 		if (ctx->src_clk[i] &&
 		    (src_hz[i] % ctx->vm.pixelclock) == 0) {
 			src = ctx->src_clk[i];
@@ -852,14 +875,33 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 	 * like the vendor dpu clock ops does, and keep the two the vendor
 	 * reprograms (core + dpi) for the parent/rate setup below. */
 	for (int i = 0; ; i++) {
-		struct clk *clk = of_clk_get(dev->of_node, i);
+		const char *name;
+		struct clk *clk;
 
-		if (IS_ERR(clk))
+		if (of_property_read_string_index(dev->of_node, "clock-names",
+						  i, &name))
 			break;
+		/*
+		 * 0x64560034 bit0 (dsi-iso-sw-en) is the DSI lane isolation
+		 * switch, bit1 gates the DPHY div6 clock.  They are modelled
+		 * as clocks, but they are not clocks the display can use:
+		 * enabling the isolation bit parks every DCS packet in the
+		 * TX FIFO (test 61 live session: "tx payload fifo is not
+		 * empty" forever, CMD_MODE_STATUS never drains).  The vendor
+		 * LK clears the register for sprd,dpi-clk-div panels
+		 * (qogirl6/global_dispc.c:div_to_clk()).  Leave both off.
+		 */
+		if (!strcmp(name, "clk_dsi_iso_sw_en") ||
+		    !strcmp(name, "dsi_div6clk_gate"))
+			continue;
+
+		clk = devm_clk_get(dev, name);
+		if (IS_ERR(clk))
+			continue;
 		if (clk_prepare_enable(clk))
-			dev_err(dev, "failed to enable clock #%d\n", i);
+			dev_err(dev, "failed to enable clock %s\n", name);
 		else
-			dev_dbg(dev, "clock #%d enabled\n", i);
+			dev_dbg(dev, "clock %s enabled\n", name);
 	}
 	ctx->clk = NULL;
 
@@ -879,6 +921,44 @@ static int sprd_dpu_context_init(struct sprd_dpu *dpu,
 		for (i = 0; i < ARRAY_SIZE(ctx->src_clk); i++)
 			ctx->src_clk[i] = devm_clk_get_optional(dev,
 								src_names[i]);
+	}
+
+	/*
+	 * The vendor DT describes the block reset as "disp_reset"
+	 * (AP_AHB_AHB_RST bit1).  The port used to take over from the
+	 * bootloader with a stop handshake: set STOP and wait for the
+	 * stop-done interrupt.  That interrupt only arrives on a frame
+	 * boundary, and if it does not come the STOP bit stays asserted
+	 * and the shadow register bank stays locked for good - RUN is
+	 * then ignored and the DPU never produces a single vsync
+	 * (test 61: DPU IRQ stuck at 0, every update timed out).
+	 * Hard-reset the block once at probe instead: it comes up stopped
+	 * with a clean register file, sprd_dpu_init() then skips the stop
+	 * handshake (ctx->stopped) and the DSI bridge enable starts it.
+	 */
+	{
+		unsigned int args[2] = { 0, 0 };
+
+		/* first entry of the node syscons list: "disp_reset" */
+		ctx->rst_regmap =
+			syscon_regmap_lookup_by_phandle_args(dev->of_node,
+							     "syscons", 2, args);
+		if (!IS_ERR_OR_NULL(ctx->rst_regmap)) {
+			ctx->rst_reg = args[0];
+			ctx->rst_mask = args[1];
+		}
+	}
+	if (!IS_ERR_OR_NULL(ctx->rst_regmap) && ctx->rst_mask) {
+		regmap_update_bits(ctx->rst_regmap, ctx->rst_reg,
+				   ctx->rst_mask, ctx->rst_mask);
+		udelay(10);
+		regmap_update_bits(ctx->rst_regmap, ctx->rst_reg,
+				   ctx->rst_mask, 0);
+		ctx->stopped = true;
+		dev_info(dev, "dpu reset via disp_reset syscon\n");
+	} else {
+		dev_warn(dev, "no disp_reset syscon, keeping stop handshake\n");
+		ctx->rst_regmap = NULL;
 	}
 
 	/* disable and clear interrupts before register dpu IRQ. */
