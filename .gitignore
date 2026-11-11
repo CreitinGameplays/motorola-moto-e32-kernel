@@ -188,3 +188,34 @@ sphinx_*/
 
 # bc language scripts (not LLVM bitcode)
 !kernel/time/timeconst.bc
+
+# --- hawaii (XT2227-1) 7.1 bring-up: local scratch and build leftovers ---
+# We build out-of-tree (make O=$HOME/l71out), but keep the tree clean if
+# anyone does an in-tree build or drops scratch files here.
+# NOTE: do not re-add patterns the upstream list already handles
+# (tags/TAGS/cscope/compile_commands.json) - the upstream "tags" rule
+# comes with a "!tags/" re-include for tracked directories of that name.
+
+# in-tree kernel configuration (the tracked configs under
+# arch/arm64/configs/ must NOT be ignored)
+/.config
+
+# out-of-tree build directories created inside the source tree
+/out/
+/build/
+/l71out/
+
+# build by-products of an in-tree build
+/vmlinux
+/System.map
+
+# local scratch: patches, diffs, editor leftovers
+*.patch
+*.diff
+*.rej
+*.orig
+*~
+.*.swp
+.*.sw?
+.DS_Store
+Thumbs.db
