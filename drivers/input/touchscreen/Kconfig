@@ -1426,3 +1426,13 @@ config TOUCHSCREEN_HIMAX_HX83112B
 	  module will be called himax_hx83112b.
 
 endif
+
+config TOUCHSCREEN_NOVATEK_NVT_SPI
+	tristate "Novatek NT36xxx SPI touchscreen"
+	depends on SPI
+	select INPUT_MT_ABS
+	help
+	  Port of the vendor Novatek NT36xxx touchscreen driver (SPI) for
+	  the Moto E32 (XT2227-1).  The panel is described by the vendor
+	  DT node "novatek,NVT-ts-spi" with novatek,irq-gpio and
+	  novatek,reset-gpio on the PMIC EIC.
