@@ -159,8 +159,16 @@ static int sprd_wlan_remove(struct platform_device *pdev)
 	 * SC2332/SIPC variants, so rmmod unloaded the module with the recovery watchdog's delayed work (static,
 	 * on system_wq, rearming itself every second), the wiphy, wlan0 and the WCN reset notifier all still
 	 * live, and __run_timers fired the watchdog's timer in freed memory within a second.
+	 *
+	 * HAWAII (same issue, SDIO): turning Wi-Fi off powers WCN down, which removes the SC2355 SDIO card, and
+	 * the vendor Wi-Fi HAL then unloads sprdwl_ng.  The SDIO branch was excluded here too, so the same
+	 * watchdog work survived the module: __run_timers wrote into the freed module area and panicked in
+	 * interrupt context ~0.2 s after "sprd_wlan_remove sprd,sc2355-wifi 2" (Oops 96000047, WnR=1,
+	 * run_timer_softirq+0x20c).  Both probed variants (PCIe and SDIO) create their state through
+	 * sprd_iface_probe(), so both must take it down the same way.
 	 */
-	if (p_match_data->hw_type == SPRD_HW_SC2355_PCIE)
+	if (p_match_data->hw_type == SPRD_HW_SC2355_PCIE ||
+	    p_match_data->hw_type == SPRD_HW_SC2355_SDIO)
 		sprd_iface_remove(pdev);
 	return 0;
 }
