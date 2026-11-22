@@ -85,6 +85,34 @@ $S --enable VIRTUALIZATION --enable KVM --enable KVM_ARM_HOST \
 # BROM recovery), and the next boot can read the test kernel's pstore log.
 $S --enable KEXEC
 
+# --- performance defaults (applied to every build) ---------------------
+# 300 Hz ticks: AOSP's UI-jank guidance (source.android.com jank/jitter);
+# HZ=1000 costs idle power, HZ=100 adds scheduler wakeup latency.  No shared
+# struct layout depends on HZ; the prebuilt vendor modules constant-folded
+# msecs_to_jiffies() at HZ=250, so their timeouts run ~20% short - harmless.
+# The boot-critical modules (mali, wlan, BT) are rebuilt with this config.
+$S --disable HZ_100 --disable HZ_250 --enable HZ_300
+
+# TCP BBR + fq_codel: the combo LineageOS measured best (gauguin:
+# "Switch to BBR TCP + fq_codel qdisc").  BBR is resilient to loss and
+# bufferbloat; cubic stays built in as a selectable fallback, and fq stays
+# available for BBR's pacing path.
+$S --enable TCP_CONG_ADVANCED --enable TCP_CONG_BBR --enable TCP_CONG_CUBIC \
+   --disable DEFAULT_CUBIC --enable DEFAULT_BBR \
+   --enable NET_SCH_FQ --enable NET_SCH_FQ_CODEL --enable NET_SCH_CODEL \
+   --enable NET_SCH_DEFAULT --disable DEFAULT_PFIFO_FAST \
+   --enable DEFAULT_FQ_CODEL
+
+# ARMv8 crypto extensions (Cortex-A75/A55 have them): CRC32/CRC32C through
+# the crypto API (f2fs/ext4 metadata checksums), bit-sliced AES (FBE,
+# WPA2/WPA3), SHA-512 and ChaCha20.  All runtime-detected, no ABI impact.
+$S --enable CRYPTO_CRC32_ARM64_CE --enable CRYPTO_AES_ARM64_BS \
+   --enable CRYPTO_SHA512_ARM64 --enable CRYPTO_CHACHA20_NEON
+
+# Virtualization Host Extensions: lets KVM run the host at EL2 and cuts the
+# world-switch cost on ARMv8.1+ (runtime-detected; no-op on older cores).
+$S --enable ARM64_VHE
+
 M="make O=$OUT ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang \
    LD=ld.lld LLVM_AR=llvm-ar LLVM_NM=llvm-nm OBJDUMP=llvm-objdump"
 
