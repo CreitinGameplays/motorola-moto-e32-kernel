@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MIT)
 /*
- * Motorola Moto E32 (XT2227-1, "hawaii") - Unisoc UMS9230 / T606
+ * Motorola Moto E32 (XT2227-1, "hawaii", board 4h10) - Unisoc UMS9230 / T606
  *
- * Milestone-1 board: CPU/PSCI/GIC/timers/UFS plus the framebuffer log
- * buffer and ramoops, so the on-panel indicator and pstore work.
- * Display (DPU/DSI + NT36525C panel), touch, PMIC (SC2730) regulators,
- * cameras, audio and modem come later; the corresponding SoC nodes
- * stay disabled by default.
+ * Self-contained 7.1 board description.  The board-level DT nodes the
+ * vendor-derived 7.1 drivers need are ported from the stock 4.14 DTB so the
+ * kernel can boot from its own DTB instead of relying on the bootloader's
+ * vendor DTB + dtbo merge.  The drivers keep their vendor-path fallbacks
+ * (harmless no-ops on this tree).
  */
-
 /dts-v1/;
 
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
 #include "ums9230.dtsi"
+#include "sc2730.dtsi"
+#include "lcd_nt36525c_boe_mipi_fhd.dtsi"
 
 / {
 	model = "Motorola Moto E32 (XT2227-1)";
@@ -23,8 +28,6 @@
 	};
 
 	chosen {
-		/* the bootloader passes console=null and the UART is unwired;
-		 * the pstore ram console records everything */
 		stdout-path = "serial1:115200n8";
 	};
 
@@ -50,21 +53,78 @@
 			pmsg-size = <0x8000>;
 		};
 	};
+
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <4850000>;
+		charge-term-current-microamp = <130000>;
+		constant-charge-voltage-max-microvolt = <4400000>;
+		voltage-min-design-microvolt = <3500000>;
+		voltage-max-design-microvolt = <4370000>;
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		key-power {
+			wakeup-source;
+			debounce-interval = <2>;
+			gpios = <&pmic_eic 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+			label = "Power Key";
+		};
+
+		key-volumeup {
+			wakeup-source;
+			debounce-interval = <2>;
+			gpios = <&pmic_eic 4 GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEUP>;
+			label = "Volume Up Key";
+		};
+
+		key-volumedown {
+			wakeup-source;
+			debounce-interval = <2>;
+			gpios = <&ap_gpio 124 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;
+			label = "Volume Down Key";
+		};
+
+		key-google {
+			wakeup-source;
+			debounce-interval = <2>;
+			gpios = <&ap_gpio 126 GPIO_ACTIVE_LOW>;
+			linux,code = <249>;
+			label = "Google Key";
+		};
+	};
+
+	usb_cable {
+		compatible = "sprd,usb_cable_eint";
+		usbcable-gpio = <&ap_gpio 121 GPIO_ACTIVE_LOW>;
+		debounce = <250000>;
+		status = "okay";
+	};
 };
 
 &uart0 { status = "okay"; };
 &uart1 { status = "okay"; };
 
+/*
+ * The PMIC soft reset lives in the sprd-adi driver's qogirl6 variant; the
+ * "sprd,ums512-adi" fallback has no ->restart callback and would win the
+ * of_match table walk, so drop it here.
+ */
+&adi_bus {
+	compatible = "sprd,qogirl6-adi", "sprd,ums9230-adi";
+};
+
+/* Storage */
 &ufs {
 	status = "okay";
 };
 
-/*
- * USB: peripheral-only, so the kernel can bring up the musb gadget and
- * expose ttyGS0 (CDC-ACM) as a console channel.  Fork issue #20: the Realme
- * C35 needed exactly this - &hsphy and &usb status okay - and the mainline
- * glue; the vendor DTB path never worked for us.
- */
+/* USB gadget (CDC-ACM serial console on ttyGS0) */
 &usb {
 	status = "okay";
 	dr_mode = "peripheral";
@@ -72,17 +132,73 @@
 
 &hsphy {
 	status = "okay";
+	phy-supply = <&vddusb33>;
 };
 
-/*
- * Reset: the SC2730 PMIC soft reset lives in the sprd-adi driver's
- * qogirl6/sharkl5 variant (drivers/spi/spi-sprd-adi.c), which carries the
- * vendor's register sequence (RST_STATUS=0x1bac, SWRST_CTRL0=0x1bf8,
- * SOFT_RST_HW=0x1824).  The dtsi default ("sprd,ums9230-adi",
- * "sprd,ums512-adi") binds ums512_data, which has no ->restart callback,
- * and of_match_device() walks the *driver's* table in order, so
- * "sprd,ums512-adi" has to go: otherwise it wins over qogirl6.
- */
-&adi_bus {
-	compatible = "sprd,qogirl6-adi", "sprd,ums9230-adi";
+/* Display: DPU -> DSI -> BOE NT36525C panel (DCS table in the /lcds node) */
+&disp {
+	status = "okay";
 };
+
+&dpu {
+	status = "okay";
+};
+
+&dsi {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	panel@0 {
+		compatible = "sprd,generic-mipi-panel";
+		reg = <0>;
+		reset-gpios = <&ap_gpio 50 GPIO_ACTIVE_LOW>;
+		avdd-gpios = <&ap_gpio 154 GPIO_ACTIVE_LOW>;
+		avee-gpios = <&ap_gpio 155 GPIO_ACTIVE_LOW>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_out>;
+			};
+		};
+	};
+};
+
+&dsi_out {
+	remote-endpoint = <&panel_in>;
+};
+
+/* GPU */
+&gpu {
+	status = "okay";
+	mali-supply = <&vddgpu>;
+};
+
+/* Novatek NT36xxx touch controller on SPI3 (irq/reset on the AP GPIO bank) */
+&spi3 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	novatek@0 {
+		compatible = "novatek,NVT-ts-spi";
+		reg = <0>;
+		spi-max-frequency = <9600000>;
+		novatek,reset-gpio = <&ap_gpio 145 GPIO_ACTIVE_LOW>;
+		novatek,irq-gpio = <&ap_gpio 144 GPIO_ACTIVE_HIGH>;
+		novatek,swrst-n8-addr = <0x03f0fe>;
+		novatek,spi-rd-fast-addr = <0x03f310>;
+	};
+};
+
+/* WCN (SC2355 WiFi + BT over SDIO/UART) */
+&wcn {
+	status = "okay";
+	vdd-supply = <&vddwcn>;
+	vddwifipa-supply = <&vddwifipa>;
+	dcxo1v8-supply = <&vddsim2>;
+};
+
+/* Regulators needed by the enabled blocks */
+&vddusb33 { regulator-always-on; };
+&vddemmccore { regulator-always-on; };

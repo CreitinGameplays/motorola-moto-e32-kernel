@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Panel parameters for the BOE NT36525C 720x1600 MIPI-DSI panel on the
+ * Motorola Moto E32 (XT2227-1, hawaii, 4h10).
+ *
+ * Ported verbatim from the vendor 4.14 DTB (/lcds/lcd_nt36525c_boe_mipi_fhd)
+ * for the Linux 7.1 sprd_panel driver, which selects this node at runtime via
+ * the bootloader cmdline "lcd_name=lcd_nt36525c_boe_mipi_fhd".
+ */
+/ {
+	lcds {
+		lcd_nt36525c_boe_mipi_fhd {
+			sprd,sleep-out-command = [13 78 00 01 11 13 14 00 01 29];
+			sprd,sleep-in-command = [13 14 00 01 28 13 78 00 01 10];
+			sprd,initial-command = [23 00 00 02 ff 23 23 00 00 02 fb 01 23 00 00 02 00 98 23 00 00 02 07 00 23 00 00 02 08 01 23 00 00 02 09 00 23 00 00 02 ff 10 23 00 00 02 fb 01 23 00 00 02 35 00 39 00 00 03 51 00 00 39 00 00 03 68 02 01 23 00 00 02 53 2c 23 00 00 02 55 00 13 78 00 01 11 13 14 00 01 29];
+			sprd,reset-off-sequence = <0x01 0x05>;
+			sprd,reset-on-sequence = <0x01 0x05 0x00 0x05 0x01 0x05 0x00 0x05 0x01 0x14>;
+			sprd,hporch-lp-disable = <0x01>;
+			sprd,video-lp-cmd-enable = <0x01>;
+			sprd,dpi-clk-div = <0x06>;
+			sprd,esd-return-code = <0x9c>;
+			sprd,esd-check-regs = <0x0a>;
+			sprd,esd-check-period = <0x7d0>;
+			sprd,esd-check-mode = <0x00>;
+			sprd,esd-check-enable = <0x00>;
+			sprd,height-mm = <0x79>;
+			sprd,width-mm = <0x44>;
+			sprd,phy-escape-clock = <0x4e20>;
+			sprd,phy-bit-clock = <0xce0e0>;
+			sprd,dsi-color-format = "rgb888";
+			sprd,dsi-lane-number = <0x04>;
+			sprd,dsi-work-mode = <0x01>;
+
+			display-timings {
+				native-mode = <&timing0>;
+
+				timing1 {
+					vsync-len = <0x02>;
+					hsync-len = <0x04>;
+					vfront-porch = <0x3da>;
+					vback-porch = <0x146>;
+					hfront-porch = <0x28>;
+					hback-porch = <0x28>;
+					vactive = <0x640>;
+					hactive = <0x2d0>;
+					clock-frequency = <0x8626490>;
+				};
+
+				timing0: timing0 {
+					vsync-len = <0x02>;
+					hsync-len = <0x04>;
+					vfront-porch = <0x0a>;
+					vback-porch = <0x146>;
+					hfront-porch = <0x28>;
+					hback-porch = <0x28>;
+					vactive = <0x640>;
+					hactive = <0x2d0>;
+					clock-frequency = <0x8626490>;
+				};
+			};
+
+			oled-backlight {
+				brightness-levels = [23 00 00 02 51 ff];
+				sprd,max-level = <0xff>;
+				default-brightness-level = <0x21>;
+			};
+		};
+	};
+};
