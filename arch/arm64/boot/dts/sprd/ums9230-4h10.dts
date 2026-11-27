@@ -21,6 +21,15 @@
 / {
 	model = "Motorola Moto E32 (XT2227-1)";
 	compatible = "motorola,hawaii", "sprd,ums9230-4h10", "sprd,ums9230";
+	/*
+	 * Root identity keys the Unisoc DT_TABLE matcher looks for before it
+	 * hands the DTB to the kernel (look_for_matching_device_from_dt /
+	 * load_fixup_dt_img).  Without sprd,sc-id the bootloader prints
+	 * "No matching DTB could be found" and never starts the kernel.
+	 * Values are the ones from the live vendor DTB on this device.
+	 */
+	cpuinfo_hardware = "Unisoc ums9230";
+	sprd,sc-id = "ums9230 4h10 DC4CPU";
 
 	aliases {
 		serial0 = &uart0;
