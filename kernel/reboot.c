@@ -91,6 +91,8 @@ static BLOCKING_NOTIFIER_HEAD(reboot_notifier_list);
  */
 void emergency_restart(void)
 {
+	pr_emerg("H71-REBOOT: emergency_restart caller=%pS\n",
+		 __builtin_return_address(0));
 	kmsg_dump(KMSG_DUMP_EMERG);
 	system_state = SYSTEM_RESTART;
 	machine_emergency_restart();
@@ -286,6 +288,9 @@ static void do_kernel_restart_prepare(void)
  */
 void kernel_restart(char *cmd)
 {
+	pr_emerg("H71-REBOOT: kernel_restart cmd='%s' system_state=%d caller=%pS\n",
+		 cmd ? cmd : "(null)", system_state, __builtin_return_address(0));
+	dump_stack();
 	kernel_restart_prepare(cmd);
 	do_kernel_restart_prepare();
 	migrate_to_reboot_cpu();
@@ -314,6 +319,8 @@ static void kernel_shutdown_prepare(enum system_states state)
  */
 void kernel_halt(void)
 {
+	pr_emerg("H71-REBOOT: kernel_halt system_state=%d caller=%pS\n",
+		 system_state, __builtin_return_address(0));
 	kernel_shutdown_prepare(SYSTEM_HALT);
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
@@ -704,6 +711,9 @@ EXPORT_SYMBOL_GPL(kernel_can_power_off);
  */
 void kernel_power_off(void)
 {
+	pr_emerg("H71-REBOOT: kernel_power_off system_state=%d caller=%pS\n",
+		 system_state, __builtin_return_address(0));
+	dump_stack();
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	do_kernel_power_off_prepare();
 	migrate_to_reboot_cpu();
@@ -743,6 +753,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 			magic2 != LINUX_REBOOT_MAGIC2B &&
 			magic2 != LINUX_REBOOT_MAGIC2C))
 		return -EINVAL;
+
+	pr_emerg("H71-REBOOT: sys_reboot magic1=%#x magic2=%#x cmd=%#x comm=%s pid=%d\n",
+		 magic1, magic2, cmd, current->comm, task_pid_nr(current));
 
 	/*
 	 * If pid namespaces are enabled and the current task is in a child
@@ -792,6 +805,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		}
 		buffer[sizeof(buffer) - 1] = '\0';
 
+		pr_emerg("H71-REBOOT: sys_reboot RESTART2 arg='%s'\n", buffer);
 		kernel_restart(buffer);
 		break;
 
