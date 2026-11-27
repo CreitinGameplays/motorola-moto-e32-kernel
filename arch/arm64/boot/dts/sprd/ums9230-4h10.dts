@@ -160,6 +160,8 @@
 
 /* Storage */
 &ufs {
+	vcc-supply = <&vddemmccore>;
+	vcc-fixed-regulator;
 	status = "okay";
 };
 
