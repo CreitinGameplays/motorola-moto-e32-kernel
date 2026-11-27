@@ -1133,7 +1133,7 @@
 			};
 		};
 
-		aon_clk: clock-controller@64012000 {
+		aon_clk: aonapb_gate: clock-controller@64012000 {
 			compatible = "sprd,ums9230-aonapb-clk";
 			reg = <0x64012000 0x1000>;
 			clocks = <&ext_26m>, <&ext_32k>, <&rco_100m>;
@@ -1300,7 +1300,7 @@
 					   <35 0x19b8>, <39 0x19ac>;
 		};
 
-		pwm: pwm@643f0000 {
+		pwm: pwms: pwm@643f0000 {
 			compatible = "sprd,ums9230-pwm", "sprd,ums512-pwm";
 			reg = <0x643f0000 0x10000>;
 			clocks = <&aon_clk CLK_PWM0>, <&aon_gate CLK_PWM0_EB>,
@@ -1519,7 +1519,7 @@
 			reg = <0x645b0000 0x10000>;
 		};
 
-		pinctrl: pinctrl@64710000 {
+		pinctrl: pin_controller: pinctrl@64710000 {
 			compatible = "sprd,ums9230-pinctrl";
 			reg = <0x64710000 0x10000>;
 		};
@@ -1794,7 +1794,7 @@
 		};
 	};
 
-	sound: sound {
+	sound: sound_vbc_v4_sprd_codec: sound {
 		compatible = "sprd,ums9230-audio-card";
 		sprd,pcm-platform = <&sprd_pcm>;
 		memory-region = <&audio_dma_region>;
@@ -1810,7 +1810,7 @@
 		status = "disabled";
 	};
 
-	thermal-zones {
+	thm_zone: thermal-zones {
 		cputop0-thermal {
 			polling-delay-passive = <250>;
 
