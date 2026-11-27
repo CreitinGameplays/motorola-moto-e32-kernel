@@ -243,3 +243,8 @@
 /* Regulators needed by the enabled blocks */
 &vddusb33 { regulator-always-on; };
 &vddemmccore { regulator-always-on; };
+
+
+&wdt {
+	status = "disabled";
+};
