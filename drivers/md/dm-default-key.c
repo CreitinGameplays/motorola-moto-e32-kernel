@@ -274,6 +274,12 @@ static int default_key_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad;
 	}
 
+	pr_err("H71-DMKEY ctr: cipher=%s keylen=%u iv_offset=%llu start=%llu "
+	       "sector_size=%u hw_wrapped=%d max_dun=%llu len=%llu\n",
+	       dkc->cipher_string, raw_key_size, dkc->iv_offset, dkc->start,
+	       dkc->sector_size, dkc->is_hw_wrapped, dkc->max_dun,
+	       (unsigned long long)ti->len);
+
 	ti->num_flush_bios = 1;
 
 	/* 7.1 dm stacks crypto profiles itself - no passthrough flag needed,
@@ -319,21 +325,32 @@ static int default_key_map(struct dm_target *ti, struct bio *bio)
 	 * and must not get the metadata key on top (the 4.14 flag
 	 * bio_should_skip_dm_default_key() expressed exactly this).
 	 */
-	if (bio_has_crypt_ctx(bio) || !bio_has_data(bio))
+	if (bio_has_crypt_ctx(bio) || !bio_has_data(bio)) {
+		if (unlikely(printk_ratelimit()))
+			pr_err("H71-DMKEY skip: crypt_ctx=%d data=%d sector=%llu\n",
+			       bio_has_crypt_ctx(bio), bio_has_data(bio),
+			       (unsigned long long)bio->bi_iter.bi_sector);
 		return DM_MAPIO_REMAPPED;
+	}
 
 	/* Calculate the DUN and enforce data-unit (crypto sector) alignment. */
 	dun[0] = dkc->iv_offset + sector_in_target; /* 512-byte sectors */
-	if (dun[0] & ((dkc->sector_size >> SECTOR_SHIFT) - 1))
+	if (dun[0] & ((dkc->sector_size >> SECTOR_SHIFT) - 1)) {
+		pr_err("H71-DMKEY KILL misaligned: dun=%llu sector_size=%u\n",
+		       dun[0], dkc->sector_size);
 		return DM_MAPIO_KILL;
+	}
 	dun[0] >>= dkc->sector_bits - SECTOR_SHIFT; /* crypto sectors */
 
 	/*
 	 * This check isn't necessary as we should have calculated max_dun
 	 * correctly, but be safe.
 	 */
-	if (WARN_ON_ONCE(dun[0] > dkc->max_dun))
+	if (WARN_ON_ONCE(dun[0] > dkc->max_dun)) {
+		pr_err("H71-DMKEY KILL max_dun: dun=%llu max=%llu\n",
+		       dun[0], dkc->max_dun);
 		return DM_MAPIO_KILL;
+	}
 
 	bio_crypt_set_ctx(bio, &dkc->key, dun, GFP_NOIO);
 
@@ -428,6 +445,11 @@ static struct target_type default_key_target = {
 	.prepare_ioctl		= default_key_prepare_ioctl,
 	.iterate_devices	= default_key_iterate_devices,
 	.io_hints		= default_key_io_hints,
+	/* Without this, dm_table_construct_crypto_profile() builds an empty
+	 * profile for the dm device and every bio with the metadata key
+	 * context completes with EIO (the stock 4.14 driver set the
+	 * equivalent ti->may_passthrough_inline_crypto flag here). */
+	.features		= DM_TARGET_PASSES_CRYPTO,
 };
 
 static int __init dm_default_key_init(void)

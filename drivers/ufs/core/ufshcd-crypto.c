@@ -63,6 +63,10 @@ static int ufshcd_crypto_keyslot_program(struct blk_crypto_profile *profile,
 		}
 	}
 
+	pr_err("H71-UFSCRYPTO prog: slot=%u mode=%d dus=%u cap=%d caps=%d\n",
+	       slot, key->crypto_cfg.crypto_mode,
+	       key->crypto_cfg.data_unit_size, cap_idx,
+	       hba->crypto_capabilities.num_crypto_cap);
 	if (WARN_ON(cap_idx < 0))
 		return -EOPNOTSUPP;
 
