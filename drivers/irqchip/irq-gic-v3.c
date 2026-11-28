@@ -12,6 +12,9 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
+#include <linux/interrupt.h>
+#include <linux/smp.h>
+#include <linux/of.h>
 #include <linux/kernel.h>
 #include <linux/kstrtox.h>
 #include <linux/of.h>
@@ -815,12 +818,94 @@ static bool gic_irqnr_is_special(u32 irqnr)
 	return irqnr >= 1020 && irqnr <= 1023;
 }
 
+#ifdef CONFIG_TRUSTY
+/* Trusty virtual IRQs 0..15 arrive as SGIs 13..15.  Route them to a
+ * separate linear domain so trusty-irq can map them with
+ * irq_create_of_mapping() on the "android,CustomIPI" DT node. */
+#define IPI_CUSTOM_FIRST	13
+#define IPI_CUSTOM_LAST		15
+static struct irq_domain *ipi_custom_irq_domain;
+
+static void gic_ipi_send_mask(struct irq_data *d, const struct cpumask *mask);
+
+static void custom_ipi_enable(struct irq_data *data)
+{
+	gic_ipi_send_mask(data, cpumask_of(smp_processor_id()));
+}
+
+static void custom_ipi_disable(struct irq_data *data)
+{
+}
+
+static struct irq_chip custom_ipi_chip = {
+	.name			= "CustomIPI",
+	.irq_enable		= custom_ipi_enable,
+	.irq_disable		= custom_ipi_disable,
+	.ipi_send_mask		= gic_ipi_send_mask,
+};
+
+static void handle_custom_ipi_irq(struct irq_desc *desc)
+{
+	if (!desc->action) {
+		pr_crit("CPU%u: unknown custom IPI, no handler\n",
+			smp_processor_id());
+		return;
+	}
+	if (!cpumask_test_cpu(smp_processor_id(), desc->percpu_enabled))
+		return;
+	handle_percpu_devid_irq(desc);
+}
+
+static int custom_ipi_domain_map(struct irq_domain *d, unsigned int irq,
+				 irq_hw_number_t hw)
+{
+	if (hw < IPI_CUSTOM_FIRST || hw > IPI_CUSTOM_LAST) {
+		pr_err("hwirq-%u out of range for CustomIPI\n", (unsigned)hw);
+		return -EINVAL;
+	}
+	irq_set_percpu_devid(irq);
+	irq_set_chip_and_handler(irq, &custom_ipi_chip, handle_custom_ipi_irq);
+	irq_set_status_flags(irq, IRQ_NOAUTOEN);
+	return 0;
+}
+
+static const struct irq_domain_ops custom_ipi_domain_ops = {
+	.map = custom_ipi_domain_map,
+};
+
+static int __init smp_custom_ipi_init(void)
+{
+	struct device_node *np;
+
+	np = of_find_compatible_node(NULL, NULL, "android,CustomIPI");
+	if (np) {
+		ipi_custom_irq_domain = irq_domain_add_linear(np,
+							      IPI_CUSTOM_LAST + 1,
+							      &custom_ipi_domain_ops,
+							      NULL);
+		pr_info("CustomIPI irq domain: %s\n",
+			ipi_custom_irq_domain ? "ready" : "FAILED");
+	}
+	return 0;
+}
+core_initcall(smp_custom_ipi_init);
+#endif
+
 static void __gic_handle_irq(u32 irqnr, struct pt_regs *regs)
 {
 	if (gic_irqnr_is_special(irqnr))
 		return;
 
 	gic_complete_ack(irqnr);
+
+#ifdef CONFIG_TRUSTY
+	if (ipi_custom_irq_domain && irqnr >= IPI_CUSTOM_FIRST &&
+	    irqnr <= IPI_CUSTOM_LAST) {
+		generic_handle_domain_irq(ipi_custom_irq_domain, irqnr);
+		gic_deactivate_unhandled(irqnr);
+		return;
+	}
+#endif
 
 	if (generic_handle_domain_irq(gic_data.domain, irqnr)) {
 		WARN_ONCE(true, "Unexpected interrupt (irqnr %u)\n", irqnr);

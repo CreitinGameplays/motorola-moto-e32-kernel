@@ -70,6 +70,37 @@
 			record-size = <0x8000>;
 			pmsg-size = <0x8000>;
 		};
+
+		/* Secure-world shared memory used by Trusty (the TEE).  Keep
+		 * Linux from handing these pages to the allocator. */
+		tos_shm_reserved: sh-mem@fc2a0000 {
+			reg = <0x0 0xfc2a0000 0x0 0x00100000>;
+		};
+	};
+
+	/* Trusty uses SGIs 13..15 for its virtual IRQ injection; the GICv3
+	 * driver creates a linear irq domain on this node (CONFIG_TRUSTY). */
+	ipi: interrupt-controller {
+		compatible = "android,CustomIPI";
+		#interrupt-cells = <1>;
+		interrupt-controller;
+	};
+
+	trusty {
+		compatible = "android,trusty-smc-v1";
+		irq {
+			compatible = "android,trusty-irq-v1";
+			interrupt-templates = <&ipi 0>,
+					      <&gic 1 GIC_PPI 0>,
+					      <&gic 1 GIC_SPI 0>;
+			interrupt-ranges = <0 15 0>, <16 31 1>, <32 223 2>;
+		};
+		virtio {
+			compatible = "android,trusty-virtio-v1";
+		};
+		log {
+			compatible = "android,trusty-log-v1";
+		};
 	};
 
 
