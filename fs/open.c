@@ -565,6 +565,9 @@ retry:
 			goto retry;
 		}
 	}
+	if (current->pid == 1)
+		pr_info("H71-CHDIR: '%s' ret=%d\n",
+			IS_ERR_OR_NULL(name) ? "(err)" : name->name, error);
 	return error;
 }
 
@@ -594,7 +597,7 @@ SYSCALL_DEFINE1(chroot, const char __user *, filename)
 retry:
 	error = filename_lookup(AT_FDCWD, name, lookup_flags, &path, NULL);
 	if (error)
-		return error;
+		goto out;
 
 	error = path_permission(&path, MAY_EXEC | MAY_CHDIR);
 	if (error)
@@ -612,6 +615,10 @@ dput_and_out:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
+out:
+	if (current->pid == 1)
+		pr_info("H71-CHROOT: '%s' ret=%d\n",
+			IS_ERR_OR_NULL(name) ? "(err)" : name->name, error);
 	return error;
 }
 

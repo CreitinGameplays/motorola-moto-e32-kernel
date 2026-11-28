@@ -4364,6 +4364,11 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 	char *kernel_type;
 	char *kernel_dev;
 	void *options;
+	char h71_dir[192];
+
+	h71_dir[0] = '\0';
+	if (dir_name)
+		(void)strncpy_from_user(h71_dir, dir_name, sizeof(h71_dir) - 1);
 
 	kernel_type = copy_mount_string(type);
 	ret = PTR_ERR(kernel_type);
@@ -4381,6 +4386,11 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		goto out_data;
 
 	ret = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
+
+	if (current->pid == 1)
+		pr_info("H71-MOUNT: dev='%s' dir='%s' type='%s' flags=%#lx ret=%d\n",
+			kernel_dev ? kernel_dev : "(none)", h71_dir,
+			kernel_type ? kernel_type : "(none)", flags, ret);
 
 	kfree(options);
 out_data:
