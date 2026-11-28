@@ -2926,6 +2926,12 @@ relock:
 				continue;
 		}
 
+		if (current->pid == 1 &&
+		    (signr == SIGSEGV || signr == SIGBUS || signr == SIGABRT ||
+		     signr == SIGILL || signr == SIGFPE || signr == SIGSYS ||
+		     signr == SIGTRAP))
+			pr_info("H71-SIG: init dequeued fatal signal %d\n", signr);
+
 		ka = &sighand->action[signr-1];
 
 		/* Trace actually delivered signals. */

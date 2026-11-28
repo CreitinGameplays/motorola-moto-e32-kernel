@@ -129,7 +129,11 @@ static inline bool enforcing_enabled(void)
 
 static inline void enforcing_set(bool value)
 {
-	WRITE_ONCE(selinux_state.enforcing, value);
+	/* H71-BRINGUP: stay permissive no matter what init asks for.  The
+	 * hybrid ramdisk forks its COM6 relay / eMMC logger before policy load
+	 * (u:r:kernel:s0); enforcing mode denies them /dev/kmsg, ttyGS0 and
+	 * sysdumpdb and hides the rest of second-stage boot. */
+	WRITE_ONCE(selinux_state.enforcing, false);
 }
 #else
 static inline bool enforcing_enabled(void)
