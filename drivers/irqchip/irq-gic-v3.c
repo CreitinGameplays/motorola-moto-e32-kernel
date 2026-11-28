@@ -830,6 +830,12 @@ static void gic_ipi_send_mask(struct irq_data *d, const struct cpumask *mask);
 
 static void custom_ipi_enable(struct irq_data *data)
 {
+	/* The GIC masks all SGIs at CPU init; nothing in mainline requests
+	 * SGI 13, so Trusty's virtual-IRQ notification would stay pending
+	 * forever.  Unmask it on this CPU when trusty-irq enables its IRQ. */
+	writel_relaxed(BIT(data->hwirq),
+		       gic_data_rdist_sgi_base() + GICR_ISENABLER0);
+	gic_redist_wait_for_rwp();
 	gic_ipi_send_mask(data, cpumask_of(smp_processor_id()));
 }
 
